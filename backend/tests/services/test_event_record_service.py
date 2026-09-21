@@ -374,13 +374,11 @@ class TestEventRecordServiceGetRecordsResponse:
 
 
 class TestCreateOrUpdateMeal:
-    """One meal per (data source, external_id): a meal whose start/end drift between syncs
-    is refreshed, never duplicated - only its external_id (the provider's own correlation
-    id) identifies "the same meal" across syncs, since start/end aren't stable."""
+    """One meal per (data source, start): an extended meal is refreshed, never duplicated."""
 
     START = datetime(2026, 9, 10, 12, 0, tzinfo=timezone.utc)
 
-    def _record(self, data_source: DataSource, end: datetime, external_id: str = "meal-1") -> EventRecordCreate:
+    def _record(self, data_source: DataSource, end: datetime) -> EventRecordCreate:
         return EventRecordCreate(
             id=uuid4(),
             category="meal",
@@ -388,7 +386,6 @@ class TestCreateOrUpdateMeal:
             source=data_source.source,
             user_id=data_source.user_id,
             data_source_id=data_source.id,
-            external_id=external_id,
             start_datetime=self.START,
             end_datetime=end,
             duration_seconds=int((end - self.START).total_seconds()),
@@ -448,32 +445,13 @@ class TestCreateOrUpdateMeal:
         assert detail.title == "Chicken, Rice"
         assert detail.meal_type == "dinner"
 
-    def test_a_drifted_start_with_the_same_external_id_updates_the_same_meal(self, db: Session) -> None:
-        """A meal's start can drift too (not just its end) as items are added - identity
-        must still resolve to the same row via external_id, not fail or duplicate."""
+    def test_a_different_start_is_a_different_meal(self, db: Session) -> None:
         data_source = DataSourceFactory()
-        first = self._record(data_source, self.START + timedelta(minutes=30))
-        event_record_service.create_or_update_meal(db, first, MealDetailCreate(record_id=first.id, title="Lunch"))
-        db.commit()
-
-        drifted = self._record(data_source, self.START + timedelta(hours=7))
-        drifted.start_datetime = self.START - timedelta(minutes=15)
-        saved, inserted = event_record_service.create_or_update_meal(
-            db, drifted, MealDetailCreate(record_id=drifted.id, title="Lunch, extended")
-        )
-        db.commit()
-
-        assert inserted is False
-        assert saved.id == first.id
-        assert saved.start_datetime == self.START - timedelta(minutes=15)
-
-    def test_a_different_external_id_is_a_different_meal(self, db: Session) -> None:
-        data_source = DataSourceFactory()
-        lunch = self._record(data_source, self.START + timedelta(minutes=30), external_id="lunch-1")
+        lunch = self._record(data_source, self.START + timedelta(minutes=30))
         event_record_service.create_or_update_meal(db, lunch, MealDetailCreate(record_id=lunch.id, title="Lunch"))
         db.commit()
 
-        dinner = self._record(data_source, self.START + timedelta(hours=7), external_id="dinner-1")
+        dinner = self._record(data_source, self.START + timedelta(hours=7))
         dinner.start_datetime = self.START + timedelta(hours=6)
         saved, inserted = event_record_service.create_or_update_meal(
             db, dinner, MealDetailCreate(record_id=dinner.id, title="Dinner")
