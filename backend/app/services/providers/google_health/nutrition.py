@@ -116,6 +116,7 @@ class GoogleHealthApiNutrition:
     PAGE_SIZE = 1000
 
     def __init__(self, oauth: BaseOAuthTemplate, connection_repo: UserConnectionRepository, api_base_url: str):
+        """Store the OAuth template, connection repository, and API base URL used for every request."""
         self.oauth = oauth
         self.connection_repo = connection_repo
         self.provider_name = "google_health"
@@ -154,6 +155,7 @@ class GoogleHealthApiNutrition:
         return count
 
     def _fetch(self, db: DbSession, user_id: UUID, start_time: datetime, end_time: datetime) -> list[dict[str, Any]]:
+        """Page through the dataPoints ``list`` endpoint, storing each raw response, and return all points."""
         points: list[dict[str, Any]] = []
         page_token: str | None = None
         while True:
@@ -252,6 +254,8 @@ class GoogleHealthApiNutrition:
         )
         detail = MealDetailCreate(record_id=record.id, title=meal.title, meal_type=meal.meal_type)
         saved, inserted = event_record_service.create_or_update_meal(db, record, detail)
+        if inserted:
+            event_record_service.schedule_meal_webhook(db, saved.id, record, detail, meal.nutrients)
 
         if not inserted:
             # A nutrient the provider stopped reporting must not linger from the previous sync.
@@ -262,6 +266,7 @@ class GoogleHealthApiNutrition:
         return inserted
 
     def _build_samples(self, user_id: UUID, meal_id: UUID, meal: "_Meal") -> list[TimeSeriesSampleCreate]:
+        """Build one `TimeSeriesSampleCreate` per nutrient in the meal, linked back to it."""
         return [
             TimeSeriesSampleCreate(
                 id=uuid4(),
