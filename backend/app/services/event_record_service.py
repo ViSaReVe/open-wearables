@@ -69,6 +69,7 @@ from app.services.priority_service import priority_service
 from app.services.scores.sleep_service import sleep_score_service
 from app.services.services import AppService
 from app.utils.conversion import as_dict_list, as_float, as_model, minutes_to_seconds
+from app.utils.db_events import defer_until_commit
 from app.utils.exceptions import handle_exceptions
 from app.utils.pagination import encode_cursor
 
@@ -737,15 +738,19 @@ class EventRecordService(
 
         Called explicitly by whoever creates/updates the meal, once its nutrient samples are
         known - create_or_update_meal itself doesn't call this, since a newly inserted meal's
-        nutrients aren't always known at that point (see create_or_update_meal). Firing here
-        (rather than immediately) also avoids racing a transaction that might still roll back:
-        the caller only flushes, it doesn't commit.
+        nutrients aren't always known at that point (see create_or_update_meal). The caller
+        only flushes - it commits the meal alongside its nutrient samples - so firing here
+        would race a transaction that might still roll back. Uses defer_until_commit rather
+        than a raw after_commit listener because callers (e.g. the Google Health nutrition
+        sync) run this inside a per-meal begin_nested() savepoint: a plain listener would fire
+        on that savepoint's release, before the caller's real commit, and would survive
+        uncleared if the savepoint rolled back instead.
         """
         if not svix_service.is_enabled():
             return
 
-        @sa_event.listens_for(db_session, "after_commit", once=True)
-        def _dispatch_meal_webhook(_session: DbSession) -> None:
+        @defer_until_commit(db_session)
+        def _dispatch_meal_webhook() -> None:
             """Fire meal.created now that the meal and its nutrient samples are committed."""
             on_meal_created(
                 record_id=record_id,
