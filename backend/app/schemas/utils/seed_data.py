@@ -1,10 +1,18 @@
 """Schemas for seed data generation via the dashboard."""
 
 from datetime import date
+from typing import NamedTuple
 
 from pydantic import BaseModel, Field, model_validator
 
 from app.schemas.enums import ProviderName, SeriesType, WorkoutType
+
+
+class IntRange(NamedTuple):
+    """A (min, max) integer range, accessed by name or index."""
+
+    min: int
+    max: int
 
 
 class WorkoutConfig(BaseModel):
@@ -16,9 +24,9 @@ class WorkoutConfig(BaseModel):
     )
     duration_min_minutes: int = Field(15, ge=5, le=600)
     duration_max_minutes: int = Field(180, ge=5, le=600)
-    hr_min_range: tuple[int, int] = (90, 120)
-    hr_max_range: tuple[int, int] = (140, 180)
-    steps_range: tuple[int, int] = (500, 20_000)
+    hr_min_range: IntRange = IntRange(90, 120)
+    hr_max_range: IntRange = IntRange(140, 180)
+    steps_range: IntRange = IntRange(500, 20_000)
     date_range_months: int = Field(6, ge=1, le=24)
     date_from: date | None = Field(None, description="Explicit start date. Overrides date_range_months.")
     date_to: date | None = Field(None, description="Explicit end date. Overrides date_range_months.")
@@ -40,9 +48,9 @@ class WorkoutConfig(BaseModel):
 class SleepStageDistribution(BaseModel):
     """Percentage ranges for each sleep stage. Light = remainder (100% - others)."""
 
-    deep_pct_range: tuple[int, int] = (15, 25)
-    rem_pct_range: tuple[int, int] = (20, 25)
-    awake_pct_range: tuple[int, int] = (2, 8)
+    deep_pct_range: IntRange = IntRange(15, 25)
+    rem_pct_range: IntRange = IntRange(20, 25)
+    awake_pct_range: IntRange = IntRange(2, 8)
 
     @model_validator(mode="after")
     def _validate_ranges(self) -> "SleepStageDistribution":
@@ -156,15 +164,18 @@ class MealConfig(BaseModel):
     meal_types: list[str] | None = Field(
         None, description="Specific meal types to generate. None = random from breakfast/lunch/dinner/snack."
     )
-    calories_range: tuple[int, int] = (150, 900)
+    calories_range: IntRange = IntRange(150, 900)
     date_range_months: int = Field(6, ge=1, le=24)
     date_from: date | None = Field(None, description="Explicit start date. Overrides date_range_months.")
     date_to: date | None = Field(None, description="Explicit end date. Overrides date_range_months.")
 
     @model_validator(mode="after")
     def _validate_ranges(self) -> "MealConfig":
-        if self.calories_range[0] > self.calories_range[1]:
-            msg = f"calories_range min ({self.calories_range[0]}) must be <= max ({self.calories_range[1]})"
+        if self.calories_range.min > self.calories_range.max:
+            msg = f"calories_range min ({self.calories_range.min}) must be <= max ({self.calories_range.max})"
+            raise ValueError(msg)
+        if self.calories_range.min < 0:
+            msg = f"calories_range min ({self.calories_range.min}) must be >= 0"
             raise ValueError(msg)
         if self.date_from and self.date_to and self.date_from > self.date_to:
             msg = f"date_from ({self.date_from}) must be <= date_to ({self.date_to})"

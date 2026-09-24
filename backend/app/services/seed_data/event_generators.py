@@ -333,7 +333,7 @@ def _generate_meal(
     meal_type = fake.random.choice(meal_types)
     title = fake.random.choice(MEAL_TITLES.get(meal_type, MEAL_TITLES["snack"]))
 
-    calories = fake.random_int(min=config.calories_range[0], max=config.calories_range[1])
+    calories = fake.random_int(min=config.calories_range.min, max=config.calories_range.max)
     protein_pct = fake.random.uniform(0.15, 0.30)
     fat_pct = fake.random.uniform(0.20, 0.35)
     carbs_pct = max(0.0, 1 - protein_pct - fat_pct)
