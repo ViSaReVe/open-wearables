@@ -688,52 +688,6 @@ class TestGetMealsNutrients:
         }
 
 
-class TestGetMealsNutrients:
-    """get_meals sums the correlated DataPointSeries samples per meal instead of overwriting them."""
-
-    START = datetime(2026, 9, 10, 12, 0, tzinfo=timezone.utc)
-
-    def test_two_samples_of_the_same_nutrient_are_summed_not_overwritten(self, db: Session) -> None:
-        data_source = DataSourceFactory()
-        record = EventRecordCreate(
-            id=uuid4(),
-            category="meal",
-            source_name="Google Health",
-            source=data_source.source,
-            user_id=data_source.user_id,
-            data_source_id=data_source.id,
-            start_datetime=self.START,
-            end_datetime=self.START + timedelta(minutes=30),
-            duration_seconds=30 * 60,
-        )
-        event_record_service.create_or_update_meal(
-            db, record, MealDetailCreate(record_id=record.id, title="Chicken, then rice", meal_type="lunch")
-        )
-        db.commit()
-
-        protein_type = db.get(SeriesTypeDefinition, get_series_type_id(SeriesType.dietary_protein))
-        DataPointSeriesFactory(
-            data_source=data_source,
-            series_type=protein_type,
-            event_record_id=record.id,
-            recorded_at=self.START,
-            value=Decimal("10"),
-        )
-        DataPointSeriesFactory(
-            data_source=data_source,
-            series_type=protein_type,
-            event_record_id=record.id,
-            recorded_at=self.START + timedelta(minutes=10),
-            value=Decimal("21"),
-        )
-        db.commit()
-
-        response = event_record_service.get_meals(db, data_source.user_id, EventRecordQueryParams())
-
-        assert len(response.data) == 1
-        assert response.data[0].macros.protein_g == 31.0
-
-
 class TestCreateOrMergeSleep:
     """Test create_or_merge_sleep adjacent session merging."""
 
