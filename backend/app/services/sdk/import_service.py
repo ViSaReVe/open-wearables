@@ -545,13 +545,13 @@ class ImportService:
         # Process workouts in batch
         workout_bundles = list(self._build_workout_bundles(request, user_id))
         if workout_bundles:
-            records = [record for record, _, _ in workout_bundles]
+            workout_records = [record for record, _, _ in workout_bundles]
             details_by_id = {detail.record_id: detail for _, detail, _ in workout_bundles}
             # Flatten all time series samples from all workouts into a single list
             time_series_samples = [sample for _, _, samples in workout_bundles for sample in samples]
 
             # Bulk create records - returns only IDs that were actually inserted
-            inserted_ids = self.event_record_service.bulk_create(db_session, records)
+            inserted_ids = self.event_record_service.bulk_create(db_session, workout_records)
             db_session.flush()
 
             # Filter details to only those records that were actually inserted (avoid FK violation)

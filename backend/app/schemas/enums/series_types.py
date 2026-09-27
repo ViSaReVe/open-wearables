@@ -167,7 +167,7 @@ class SeriesType(str, Enum):
     withings_metabolic_age = "withings_metabolic_age"
 
     # =========================================================================
-    # NUTRITION - Dietary intake (IDs 260-299)
+    # NUTRITION - Dietary intake (IDs 260-301)
     # =========================================================================
     dietary_energy_consumed = "dietary_energy_consumed"
     dietary_carbohydrates = "dietary_carbohydrates"
@@ -207,6 +207,10 @@ class SeriesType(str, Enum):
     dietary_pantothenic_acid = "dietary_pantothenic_acid"
     dietary_biotin = "dietary_biotin"
     dietary_caffeine = "dietary_caffeine"
+    dietary_fat_trans = "dietary_fat_trans"
+    dietary_energy_from_fat = "dietary_energy_from_fat"
+    dietary_fat_unsaturated = "dietary_fat_unsaturated"
+    dietary_folic_acid = "dietary_folic_acid"
 
     # =========================================================================
     # OTHER (IDs 500-)
@@ -404,6 +408,10 @@ SERIES_TYPE_DEFINITIONS: list[tuple[int, SeriesType, str]] = [
     (295, SeriesType.dietary_pantothenic_acid, "mg"),
     (296, SeriesType.dietary_biotin, "mcg"),
     (297, SeriesType.dietary_caffeine, "mg"),
+    (298, SeriesType.dietary_fat_trans, "g"),
+    (299, SeriesType.dietary_energy_from_fat, "kcal"),
+    (300, SeriesType.dietary_fat_unsaturated, "g"),
+    (301, SeriesType.dietary_folic_acid, "mcg"),
     # -------------------------------------------------------------------------
     # OTHER (IDs 500-)
     # -------------------------------------------------------------------------

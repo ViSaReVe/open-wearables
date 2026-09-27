@@ -250,6 +250,12 @@ class SDKMetricType(StrEnum):
     APPLE_DIETARY_CAFFEINE = "HKQuantityTypeIdentifierDietaryCaffeine"
     ANDROID_DIETARY_CAFFEINE = "DIETARY_CAFFEINE"
     APPLE_DIETARY_WATER = "HKQuantityTypeIdentifierDietaryWater"
+    APPLE_DIETARY_FAT_TRANS = "HKQuantityTypeIdentifierDietaryFatTrans"
+    ANDROID_DIETARY_FAT_TRANS = "DIETARY_TRANS_FAT"
+    # Health Connect only - no HealthKit counterpart.
+    ANDROID_DIETARY_ENERGY_FROM_FAT = "DIETARY_ENERGY_FROM_FAT"
+    ANDROID_DIETARY_FAT_UNSATURATED = "DIETARY_UNSATURATED_FAT"
+    ANDROID_DIETARY_FOLIC_ACID = "DIETARY_FOLIC_ACID"
 
 
 METRIC_TYPE_TO_SERIES_TYPE: dict[SDKMetricType, SeriesType] = {
@@ -465,6 +471,11 @@ METRIC_TYPE_TO_SERIES_TYPE: dict[SDKMetricType, SeriesType] = {
     SDKMetricType.APPLE_DIETARY_CAFFEINE: SeriesType.dietary_caffeine,
     SDKMetricType.ANDROID_DIETARY_CAFFEINE: SeriesType.dietary_caffeine,
     SDKMetricType.APPLE_DIETARY_WATER: SeriesType.hydration,
+    SDKMetricType.APPLE_DIETARY_FAT_TRANS: SeriesType.dietary_fat_trans,
+    SDKMetricType.ANDROID_DIETARY_FAT_TRANS: SeriesType.dietary_fat_trans,
+    SDKMetricType.ANDROID_DIETARY_ENERGY_FROM_FAT: SeriesType.dietary_energy_from_fat,
+    SDKMetricType.ANDROID_DIETARY_FAT_UNSATURATED: SeriesType.dietary_fat_unsaturated,
+    SDKMetricType.ANDROID_DIETARY_FOLIC_ACID: SeriesType.dietary_folic_acid,
 }
 
 

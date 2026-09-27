@@ -14,6 +14,7 @@ from uuid import uuid4
 import pytest
 from sqlalchemy.orm import Session
 
+from app.constants.series_types.sdk import get_series_type_from_metric_type
 from app.models import DataPointSeries, DataSource, EventRecord, MealDetails, WorkoutDetails
 from app.schemas.enums import SeriesType, get_series_type_id
 from app.schemas.providers.mobile_sdk import SyncRequest as SDKSyncRequest
@@ -1228,3 +1229,16 @@ class TestSDKImportAndroidFoodCorrelation:
         )
         assert samples_by_external_id["meal-1-protein"].event_record_id == meal.id
         assert samples_by_external_id["meal-1-caffeine"].event_record_id == meal.id
+
+    def test_new_dietary_types_added_for_health_connect_resolve(self) -> None:
+        """Regression test: DIETARY_TRANS_FAT, DIETARY_ENERGY_FROM_FAT,
+        DIETARY_UNSATURATED_FAT and DIETARY_FOLIC_ACID have no HealthKit counterpart
+        (Health Connect only), except trans fat, which Apple also reports."""
+        assert get_series_type_from_metric_type("DIETARY_TRANS_FAT") == SeriesType.dietary_fat_trans
+        assert (
+            get_series_type_from_metric_type("HKQuantityTypeIdentifierDietaryFatTrans")
+            == SeriesType.dietary_fat_trans
+        )
+        assert get_series_type_from_metric_type("DIETARY_ENERGY_FROM_FAT") == SeriesType.dietary_energy_from_fat
+        assert get_series_type_from_metric_type("DIETARY_UNSATURATED_FAT") == SeriesType.dietary_fat_unsaturated
+        assert get_series_type_from_metric_type("DIETARY_FOLIC_ACID") == SeriesType.dietary_folic_acid

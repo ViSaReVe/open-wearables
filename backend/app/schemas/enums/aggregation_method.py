@@ -149,6 +149,10 @@ AGGREGATION_METHOD_BY_TYPE: dict[SeriesType, AggregationMethod] = {
     SeriesType.dietary_pantothenic_acid: AggregationMethod.SUM,
     SeriesType.dietary_biotin: AggregationMethod.SUM,
     SeriesType.dietary_caffeine: AggregationMethod.SUM,
+    SeriesType.dietary_fat_trans: AggregationMethod.SUM,
+    SeriesType.dietary_energy_from_fat: AggregationMethod.SUM,
+    SeriesType.dietary_fat_unsaturated: AggregationMethod.SUM,
+    SeriesType.dietary_folic_acid: AggregationMethod.SUM,
     # ── Other ──
     SeriesType.electrodermal_activity: AggregationMethod.AVG,
     SeriesType.push_count: AggregationMethod.SUM,
