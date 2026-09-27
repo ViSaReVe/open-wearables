@@ -28,9 +28,9 @@ class EventRecord(BaseDbModel):
         Index("ix_event_record_source_category", "data_source_id", "category"),
         Index("ix_event_record_source_time", "data_source_id", "start_datetime", "end_datetime", unique=True),
         Index(
-            "ix_event_record_meal_source_start",
+            "ix_event_record_meal_source_external_id",
             "data_source_id",
-            "start_datetime",
+            "external_id",
             unique=True,
             postgresql_where="category = 'meal'",
         ),

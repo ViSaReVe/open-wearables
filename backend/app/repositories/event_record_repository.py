@@ -97,21 +97,31 @@ class EventRecordRepository(
     def get_by_external_id(
         self,
         db_session: DbSession,
-        user_id: UUID,
         external_id: str,
+        user_id: UUID | None = None,
+        data_source_id: UUID | None = None,
         source: str | None = None,
         provider: str | None = None,
+        category: str | None = None,
     ) -> EventRecord | None:
         """Find a single EventRecord by its provider-assigned external_id."""
-        query = (
-            db_session.query(self.model)
-            .join(DataSource, self.model.data_source_id == DataSource.id)
-            .filter(DataSource.user_id == user_id, self.model.external_id == external_id)
-        )
-        if source is not None:
-            query = query.filter(DataSource.source == source)
-        if provider is not None:
-            query = query.filter(DataSource.provider == provider)
+        if data_source_id is not None:
+            query = db_session.query(self.model).filter(
+                self.model.data_source_id == data_source_id,
+                self.model.external_id == external_id,
+            )
+        else:
+            query = (
+                db_session.query(self.model)
+                .join(DataSource, self.model.data_source_id == DataSource.id)
+                .filter(DataSource.user_id == user_id, self.model.external_id == external_id)
+            )
+            if source is not None:
+                query = query.filter(DataSource.source == source)
+            if provider is not None:
+                query = query.filter(DataSource.provider == provider)
+        if category is not None:
+            query = query.filter(self.model.category == category)
         return query.one_or_none()
 
     def delete_by_external_id(
@@ -176,6 +186,26 @@ class EventRecordRepository(
                 return existing
             raise
 
+    def create_and_flush_meal(self, db_session: DbSession, creator: EventRecordCreate) -> tuple[EventRecord, bool]:
+        """Inserting optimistically and falling back to that row on conflict closes
+        the check-then-insert window. Returns (record, is_inserted)."""
+        data_source_id, creation = self._build_creation(db_session, creator)
+        nested = db_session.begin_nested()
+        try:
+            db_session.add(creation)
+            db_session.flush()
+            nested.commit()
+            return creation, True
+        except IntegrityError:
+            nested.rollback()
+            if creator.external_id is not None:
+                existing = self.get_by_external_id(
+                    db_session, creator.external_id, data_source_id=data_source_id, category=creator.category
+                )
+                if existing is not None:
+                    return existing, False
+            raise
+
     @handle_exceptions
     def bulk_create(
         self,
@@ -233,7 +263,6 @@ class EventRecordRepository(
         if not values_list:
             return []
 
-        # 3. Batch insert with ON CONFLICT DO NOTHING
         # Chunk to stay under PostgreSQL's 65535 parameter limit (10 params/row → max ~6553 rows)
         chunk_size = 6_500
         inserted_ids: set[UUID] = set()

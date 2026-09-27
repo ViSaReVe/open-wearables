@@ -643,7 +643,7 @@ class TestSDKImportUnitConversion:
             "apple",
             [self._record("HKQuantityTypeIdentifierBodyFatPercentage", 0.304)],
         )
-        samples = import_service._build_statistic_bundles(request, user_id)
+        samples = import_service._build_statistic_bundles(request.data.records, request.provider, user_id)
 
         assert len(samples) == 1
         assert samples[0].series_type == SeriesType.body_fat_percentage
@@ -659,7 +659,7 @@ class TestSDKImportUnitConversion:
             "health_connect",
             [self._record("BODY_FAT", 30.4)],
         )
-        samples = import_service._build_statistic_bundles(request, user_id)
+        samples = import_service._build_statistic_bundles(request.data.records, request.provider, user_id)
 
         assert len(samples) == 1
         assert samples[0].series_type == SeriesType.body_fat_percentage
@@ -675,7 +675,7 @@ class TestSDKImportUnitConversion:
             "samsung",
             [self._record("BODY_FAT", 18.5)],
         )
-        samples = import_service._build_statistic_bundles(request, user_id)
+        samples = import_service._build_statistic_bundles(request.data.records, request.provider, user_id)
 
         assert len(samples) == 1
         assert samples[0].series_type == SeriesType.body_fat_percentage
@@ -691,7 +691,7 @@ class TestSDKImportUnitConversion:
             "apple",
             [self._record("HKQuantityTypeIdentifierHeight", 1.7526)],
         )
-        samples = import_service._build_statistic_bundles(request, user_id)
+        samples = import_service._build_statistic_bundles(request.data.records, request.provider, user_id)
 
         assert len(samples) == 1
         assert samples[0].series_type == SeriesType.height
@@ -707,7 +707,7 @@ class TestSDKImportUnitConversion:
             "health_connect",
             [self._record("HEIGHT", 1.7526)],
         )
-        samples = import_service._build_statistic_bundles(request, user_id)
+        samples = import_service._build_statistic_bundles(request.data.records, request.provider, user_id)
 
         assert len(samples) == 1
         assert samples[0].series_type == SeriesType.height
@@ -734,7 +734,7 @@ class TestSDKImportUnitConversion:
             "samsung",
             [self._record("BLOOD_GLUCOSE", 6.111, unit=unit)],
         )
-        samples = import_service._build_statistic_bundles(request, user_id)
+        samples = import_service._build_statistic_bundles(request.data.records, request.provider, user_id)
 
         assert len(samples) == 1
         assert samples[0].series_type == SeriesType.blood_glucose
@@ -750,7 +750,7 @@ class TestSDKImportUnitConversion:
             "apple",
             [self._record("HKQuantityTypeIdentifierBloodGlucose", 105, unit="mg/dL")],
         )
-        samples = import_service._build_statistic_bundles(request, user_id)
+        samples = import_service._build_statistic_bundles(request.data.records, request.provider, user_id)
 
         assert len(samples) == 1
         assert samples[0].series_type == SeriesType.blood_glucose
@@ -795,7 +795,7 @@ class TestSDKImportNutrition:
             "apple",
             [self._build_record("HKQuantityTypeIdentifierDietaryProtein", value=24.5, unit="g")],
         )
-        samples = import_service._build_statistic_bundles(request, user_id)
+        samples = import_service._build_statistic_bundles(request.data.records, request.provider, user_id)
 
         assert len(samples) == 1
         assert samples[0].series_type == SeriesType.dietary_protein
@@ -808,7 +808,7 @@ class TestSDKImportNutrition:
             "apple",
             [self._build_record("HKQuantityTypeIdentifierDietaryWater", value=0.5, unit="L")],
         )
-        samples = import_service._build_statistic_bundles(request, user_id)
+        samples = import_service._build_statistic_bundles(request.data.records, request.provider, user_id)
 
         assert len(samples) == 1
         assert samples[0].series_type == SeriesType.hydration
@@ -821,7 +821,7 @@ class TestSDKImportNutrition:
             "google",
             [self._build_record("HYDRATION", value=500, unit="mL")],
         )
-        samples = import_service._build_statistic_bundles(request, user_id)
+        samples = import_service._build_statistic_bundles(request.data.records, request.provider, user_id)
 
         assert len(samples) == 1
         assert samples[0].series_type == SeriesType.hydration
@@ -834,7 +834,7 @@ class TestSDKImportNutrition:
             "apple",
             [self._build_record("HKQuantityTypeIdentifierDietaryWater", value=500, unit="lb")],
         )
-        samples = import_service._build_statistic_bundles(request, user_id)
+        samples = import_service._build_statistic_bundles(request.data.records, request.provider, user_id)
 
         assert len(samples) == 1
         assert samples[0].series_type == SeriesType.hydration
@@ -850,12 +850,12 @@ class TestSDKImportMealCorrelation:
         return ImportService(log=logging.getLogger("test"))
 
     @staticmethod
-    def _correlation_record(correlation_id: str) -> dict[str, Any]:
+    def _correlation_record(correlation_id: str, end_date: str = "2026-09-18T12:00:00Z") -> dict[str, Any]:
         return {
             "id": correlation_id,
             "type": "HKCorrelationTypeIdentifierFood",
             "startDate": "2026-09-18T12:00:00Z",
-            "endDate": "2026-09-18T12:00:00Z",
+            "endDate": end_date,
             "zoneOffset": "+02:00",
             "source": {"name": "MyFitnessPal", "bundleIdentifier": "com.myfitnesspal.mfp"},
             "metadata": {"title": "Kurczak z ryżem", "mealType": "obiad"},
@@ -919,22 +919,58 @@ class TestSDKImportMealCorrelation:
         assert samples_by_external_id["protein-1"].event_record_id == meal.id
         assert samples_by_external_id["caffeine-1"].event_record_id is None
 
-    def test_food_correlation_resync_reuses_existing_meal(self, db: Session, import_service: ImportService) -> None:
-        """Re-sending the same correlation + children (idempotent re-sync) must not
-        duplicate the meal, and later batches must still resolve to its real id."""
+    def test_nutrient_record_before_its_meal_correlation_still_links(
+        self, db: Session, import_service: ImportService
+    ) -> None:
+        """`records[]` order isn't guaranteed - a child can appear before its own
+        correlation. load_data resolves every meal correlation before building any
+        statistic bundles specifically so a child referencing a not-yet-seen correlation
+        still links, regardless of where in the array that correlation shows up."""
+        user = UserFactory()
+        user_id = str(user.id)
+        payload = self._build_payload(
+            [
+                self._nutrient_record(
+                    "energy-1", "HKQuantityTypeIdentifierDietaryEnergyConsumed", 550, "Cal", "MEAL-1"
+                ),
+                self._correlation_record("MEAL-1"),
+            ]
+        )
+
+        import_service.load_data(db, payload, user_id)
+
+        meal = db.query(EventRecord).filter(EventRecord.category == "meal").one()
+        sample = db.query(DataPointSeries).filter(DataPointSeries.external_id == "energy-1").one()
+        assert sample.event_record_id == meal.id
+
+    def test_food_correlation_resync_updates_drifted_start_and_end_in_place(
+        self, db: Session, import_service: ImportService
+    ) -> None:
+        """A meal's start/end drift as items are added to it between syncs (HealthKit/Health
+        Connect recompute the correlation's window from its current members). Identity has
+        to key on the correlation's own external_id - not on time - or this either raises
+        (two unique indexes disagreeing) or silently duplicates the meal instead of updating
+        the existing row in place."""
         user = UserFactory()
         user_id = str(user.id)
         first_batch = self._build_payload(
             [
-                self._correlation_record("MEAL-1"),
+                self._correlation_record("MEAL-1", end_date="2026-09-18T12:00:00Z"),
                 self._nutrient_record(
                     "energy-1", "HKQuantityTypeIdentifierDietaryEnergyConsumed", 550, "Cal", "MEAL-1"
                 ),
             ]
         )
+        drifted_correlation = {
+            **self._correlation_record("MEAL-1", end_date="2026-09-18T12:15:00Z"),
+            "startDate": "2026-09-18T11:45:00Z",
+        }
         second_batch = self._build_payload(
             [
-                self._correlation_record("MEAL-1"),
+                drifted_correlation,
+                self._nutrient_record(
+                    "energy-1", "HKQuantityTypeIdentifierDietaryEnergyConsumed", 550, "Cal", "MEAL-1"
+                ),
                 self._nutrient_record("protein-1", "HKQuantityTypeIdentifierDietaryProtein", 38.2, "g", "MEAL-1"),
             ]
         )
@@ -943,11 +979,149 @@ class TestSDKImportMealCorrelation:
         second_result = import_service.load_data(db, second_batch, user_id)
 
         assert first_result["meals_saved"] == 1
-        assert second_result["meals_saved"] == 0  # already existed - re-sync, not a new insert
+        assert second_result["meals_saved"] == 0  # same external_id - updated in place, not a new insert
+
+        meals = db.query(EventRecord).filter(EventRecord.category == "meal").all()
+        assert len(meals) == 1
+        assert meals[0].start_datetime.isoformat() == "2026-09-18T11:45:00+00:00"
+        assert meals[0].end_datetime.isoformat() == "2026-09-18T12:15:00+00:00"
+
+        samples = db.query(DataPointSeries).join(DataSource).filter(DataSource.user_id == user.id).all()
+        samples_by_external_id = {s.external_id: s for s in samples}
+        assert samples_by_external_id["protein-1"].event_record_id == meals[0].id
+
+    def test_food_correlation_item_removed_from_meal_is_deleted_on_resync(
+        self, db: Session, import_service: ImportService
+    ) -> None:
+        """A meal only reports the items it currently has. If the user removes one (e.g.
+        deletes a food from the diary entry), the next sync of that same correlation simply
+        won't mention it - the backend must delete the now-stale sample instead of leaving
+        it linked forever, since nothing else will ever tell us it was removed."""
+        user = UserFactory()
+        user_id = str(user.id)
+        first_batch = self._build_payload(
+            [
+                self._correlation_record("MEAL-1"),
+                self._nutrient_record(
+                    "energy-1", "HKQuantityTypeIdentifierDietaryEnergyConsumed", 550, "Cal", "MEAL-1"
+                ),
+                self._nutrient_record("protein-1", "HKQuantityTypeIdentifierDietaryProtein", 38.2, "g", "MEAL-1"),
+            ]
+        )
+        # Second sync of the SAME meal: the user removed the protein-contributing item.
+        second_batch = self._build_payload(
+            [
+                self._correlation_record("MEAL-1"),
+                self._nutrient_record(
+                    "energy-1", "HKQuantityTypeIdentifierDietaryEnergyConsumed", 550, "Cal", "MEAL-1"
+                ),
+            ]
+        )
+
+        first_result = import_service.load_data(db, first_batch, user_id)
+        second_result = import_service.load_data(db, second_batch, user_id)
+
+        assert first_result["meals_saved"] == 1
+        assert second_result["meals_saved"] == 0
 
         meals = db.query(EventRecord).filter(EventRecord.category == "meal").all()
         assert len(meals) == 1
 
         samples = db.query(DataPointSeries).join(DataSource).filter(DataSource.user_id == user.id).all()
         samples_by_external_id = {s.external_id: s for s in samples}
-        assert samples_by_external_id["protein-1"].event_record_id == meals[0].id
+        assert "protein-1" not in samples_by_external_id
+        assert samples_by_external_id["energy-1"].event_record_id == meals[0].id
+
+    def test_unresolvable_meal_conflict_is_skipped_without_failing_the_batch(
+        self, db: Session, import_service: ImportService
+    ) -> None:
+        """Two distinct meals (different external_id) that happen to share the exact same
+        (data_source, start, end) collide on the general index instead of the meal-specific
+        one - create_and_flush_meal can't resolve that via external_id, since no row with the
+        second meal's external_id exists yet, so it raises. That must not sink the rest of the
+        batch (e.g. a workout in the same payload)."""
+        user = UserFactory()
+        user_id = str(user.id)
+        payload = {
+            "provider": "apple",
+            "sdkVersion": "1.2.0",
+            "syncTimestamp": "2026-09-18T12:00:00Z",
+            "data": {
+                "records": [
+                    self._correlation_record("MEAL-1"),
+                    self._correlation_record("MEAL-2"),  # same start/end as MEAL-1, different id
+                ],
+                "workouts": [
+                    {
+                        "id": "WORKOUT-1",
+                        "type": "walking",
+                        "startDate": "2026-09-18T09:00:00Z",
+                        "endDate": "2026-09-18T09:30:00Z",
+                        "source": {"name": "Test Apple Watch", "bundleIdentifier": "com.apple.health"},
+                    }
+                ],
+            },
+        }
+
+        result = import_service.load_data(db, payload, user_id)
+
+        assert result["meals_saved"] == 1
+        assert result["workouts_saved"] == 1
+
+        meals = db.query(EventRecord).filter(EventRecord.category == "meal").all()
+        assert len(meals) == 1
+        assert meals[0].external_id == "MEAL-1"
+
+        workouts = db.query(EventRecord).filter(EventRecord.category == "workout").all()
+        assert len(workouts) == 1
+
+    def test_non_nutrient_record_with_meal_parent_id_stays_loose(
+        self, db: Session, import_service: ImportService
+    ) -> None:
+        """A record's own type must be a meal nutrient before its parentId is trusted - a
+        heart rate sample whose parentId happens to match a meal's external_id must not get
+        silently absorbed into that meal's nutrient set, or delete_stale_for_event_record
+        would wrongly treat it as one of the meal's current types and keep it linked."""
+        user = UserFactory()
+        user_id = str(user.id)
+        payload = self._build_payload(
+            [
+                self._correlation_record("MEAL-1"),
+                self._nutrient_record(
+                    "energy-1", "HKQuantityTypeIdentifierDietaryEnergyConsumed", 550, "Cal", "MEAL-1"
+                ),
+                self._nutrient_record("hr-1", "HKQuantityTypeIdentifierHeartRate", 72, "bpm", "MEAL-1"),
+            ]
+        )
+
+        result = import_service.load_data(db, payload, user_id)
+        assert result["meals_saved"] == 1
+
+        meal = db.query(EventRecord).filter(EventRecord.category == "meal").one()
+        samples = db.query(DataPointSeries).join(DataSource).filter(DataSource.user_id == user.id).all()
+        samples_by_external_id = {s.external_id: s for s in samples}
+
+        assert samples_by_external_id["energy-1"].event_record_id == meal.id
+        assert samples_by_external_id["hr-1"].event_record_id is None
+
+    def test_caffeine_with_meal_parent_id_links_to_the_meal(
+        self, db: Session, import_service: ImportService
+    ) -> None:
+        """Regression test: CORRELATION_LINKABLE_SERIES_TYPES for the food correlation must
+        cover every dietary_* series type (not just the handful shown in a meal summary
+        response) - caffeine, sugar, vitamins, minerals, ... are all legitimate meal
+        nutrients and must still link when their parentId points at a resolved meal."""
+        user = UserFactory()
+        user_id = str(user.id)
+        payload = self._build_payload(
+            [
+                self._correlation_record("MEAL-1"),
+                self._nutrient_record("caffeine-1", "HKQuantityTypeIdentifierDietaryCaffeine", 95, "mg", "MEAL-1"),
+            ]
+        )
+
+        import_service.load_data(db, payload, user_id)
+
+        meal = db.query(EventRecord).filter(EventRecord.category == "meal").one()
+        sample = db.query(DataPointSeries).filter(DataPointSeries.external_id == "caffeine-1").one()
+        assert sample.event_record_id == meal.id

@@ -9,6 +9,7 @@ from uuid import UUID, uuid4
 
 import sentry_sdk
 from pydantic import ValidationError
+from sqlalchemy.exc import IntegrityError
 
 from app.constants.entry_source import get_unified_sdk_entry_source
 from app.constants.series_types.sdk import (
@@ -20,7 +21,7 @@ from app.constants.series_types.sdk import (
 from app.constants.workout_types import get_unified_sdk_workout_type
 from app.database import DbSession
 from app.repositories.user_connection_repository import UserConnectionRepository
-from app.schemas.enums import SeriesType, daily_total_flag
+from app.schemas.enums import SeriesType, daily_total_flag, get_series_type_id
 from app.schemas.model_crud.activities import (
     EventRecordCreate,
     EventRecordDetailCreate,
@@ -56,10 +57,13 @@ from .sleep_service import handle_sleep_data
 # in mg/dL round-trip with a ~0.1% offset under this factor.
 MMOL_L_TO_MG_DL = Decimal("18.0182")
 
-# HealthKit correlation types treated as a "meal" grouping. A record with one of
-# these types carries no numeric measurement itself (see MetricRecord) - it only
-# groups sibling records that reference it via their own `parentId`.
-CORRELATION_TYPE_IDENTIFIERS = frozenset({"HKCorrelationTypeIdentifierFood"})
+# Correlation types: parent records that carry no measurement of their own, but group
+# sibling records that reference them via their own `parentId`.
+CORRELATION_LINKABLE_SERIES_TYPES: dict[str, frozenset[SeriesType]] = {
+    "HKCorrelationTypeIdentifierFood": frozenset(
+        {st for st in SeriesType if st.value.startswith("dietary_")} | {SeriesType.hydration}
+    ),
+}
 
 _SDK_ITEM_MODELS = (("records", MetricRecord), ("sleep", SleepRecord), ("workouts", Workout))
 
@@ -211,21 +215,22 @@ class ImportService:
 
     def _build_meal_bundles(
         self,
-        request: SDKSyncRequest,
+        correlation_records: list[MetricRecord],
+        provider: str,
         user_id: str,
     ) -> Generator[tuple[EventRecordCreate, EventRecordDetailCreate]]:
         """Build meal (EventRecordCreate, MealDetailCreate) pairs from HealthKit
         correlation records (e.g. HKCorrelationTypeIdentifierFood).
 
-        These arrive mixed into `records[]` alongside ordinary nutrient samples,
-        distinguished only by `type`. A correlation record has no measurement value
-        of its own - its sibling records reference it via their own `parentId`,
-        resolved separately in `_build_statistic_bundles`.
+        `correlation_records` are the `records[]` entries already classified as meal
+        correlations by `load_data` - a correlation record has no measurement value of its
+        own; its sibling records reference it via their own `parentId`, resolved separately
+        in `_build_statistic_bundles`.
         """
         user_uuid = UUID(user_id)
 
-        for rjson in request.data.records:
-            if (rjson.type or "") not in CORRELATION_TYPE_IDENTIFIERS or not rjson.id:
+        for rjson in correlation_records:
+            if not rjson.id:
                 continue
 
             meal_id = uuid4()
@@ -244,7 +249,7 @@ class ImportService:
                 external_id=rjson.id,
                 source=original_source_name,
                 software_version=software_version,
-                provider=request.provider,
+                provider=provider,
                 user_id=user_uuid,
             )
             detail = MealDetailCreate(
@@ -278,27 +283,30 @@ class ImportService:
     @handle_exceptions
     def _build_statistic_bundles(
         self,
-        request: SDKSyncRequest,
+        records: list[MetricRecord],
+        provider: str,
         user_id: str,
         correlation_id_map: dict[str, UUID] | None = None,
+        correlation_type_by_external_id: dict[str, str] | None = None,
     ) -> list[HeartRateSampleCreate | StepSampleCreate | TimeSeriesSampleCreate]:
-        """Build time series samples from `records[]`, skipping meal correlation records.
+        """Build time series samples from `records[]` (correlation records themselves
+        already excluded by `load_data` - see `_build_meal_bundles`).
 
-        `correlation_id_map` links a sample to its meal (via `parentId`) when that meal's
-        correlation record was already resolved by `_build_meal_bundles` earlier in the same
-        batch; samples with no match, or no `parentId`, are saved as loose samples.
+        `correlation_id_map` links a sample to its parent (via `parentId`) when that
+        correlation was already resolved earlier in the same batch. `correlation_type_by_
+        external_id` says which correlation type that parent is, so the link is only made
+        when the sample's own series type is one CORRELATION_LINKABLE_SERIES_TYPES allows
+        for that specific correlation type - a heart rate reading whose parentId happens to
+        match a meal's external_id, say, must stay a loose sample. No match, or no
+        `parentId`, is also a loose sample.
         """
         time_series_samples: list[HeartRateSampleCreate | StepSampleCreate | TimeSeriesSampleCreate] = []
         user_uuid = UUID(user_id)
-        provider = request.provider
         correlation_id_map = correlation_id_map or {}
+        correlation_type_by_external_id = correlation_type_by_external_id or {}
 
-        for rjson in request.data.records:
+        for rjson in records:
             record_type = rjson.type or ""
-            if record_type in CORRELATION_TYPE_IDENTIFIERS:
-                # Handled separately in _build_meal_bundles - carries no measurement.
-                continue
-
             value = Decimal(str(rjson.value))
             unit = (rjson.unit or "").strip().lower()
 
@@ -319,9 +327,12 @@ class ImportService:
             # Extract device info
             device_model, software_version, original_source_name = extract_device_info(rjson.source)
 
-            # Links this sample to its meal correlation, when it has one and that
-            # correlation was resolved in this same batch. None for a loose sample.
-            event_record_id = correlation_id_map.get(rjson.parentId) if rjson.parentId else None
+            # Links this sample to its parent correlation, when it has one, its own type is
+            # allowed for THAT correlation's type, and the correlation was resolved in this
+            # same batch. None for a loose sample.
+            parent_type = correlation_type_by_external_id.get(rjson.parentId) if rjson.parentId else None
+            linkable_types = CORRELATION_LINKABLE_SERIES_TYPES.get(parent_type, frozenset())
+            event_record_id = correlation_id_map.get(rjson.parentId) if series_type in linkable_types else None
 
             sample = TimeSeriesSampleCreate(
                 id=uuid4(),
@@ -348,6 +359,37 @@ class ImportService:
                     time_series_samples.append(sample)
 
         return time_series_samples
+
+    def _reconcile_meal_samples(
+        self,
+        db_session: DbSession,
+        samples: list[HeartRateSampleCreate | StepSampleCreate | TimeSeriesSampleCreate],
+        meal_ids: set[UUID],
+    ) -> None:
+        """Delete a meal's previously-stored samples whose type this batch no longer reports.
+
+        A meal only reports the nutrient types it currently has; an item removed from it
+        (e.g. the user deletes a food from the entry) simply won't be in this set, so this
+        deletes whatever this batch no longer reports for that meal - otherwise a removed
+        item's sample would never get cleaned up. A meal absent from `samples` entirely
+        (this batch says nothing about its nutrients) is left untouched.
+
+        `meal_ids` are the ids this same call just upserted as meals - `sample.event_record_id`
+        is trusted only against that set, not merely "is not None", so a future bug that sets
+        event_record_id on a sample for some other purpose can't get its rows silently swept
+        into meal reconciliation.
+        """
+        meal_sample_type_ids: dict[UUID, set[int]] = {}
+        for sample in samples:
+            if sample.event_record_id is None or sample.event_record_id not in meal_ids:
+                continue
+            meal_sample_type_ids.setdefault(sample.event_record_id, set()).add(
+                get_series_type_id(sample.series_type)
+            )
+        for meal_id, type_ids in meal_sample_type_ids.items():
+            self.event_record_service.data_point_series_repo.delete_stale_for_event_record(
+                db_session, meal_id, type_ids
+            )
 
     def _compute_aggregates(self, values: list[Decimal]) -> tuple[Decimal | None, Decimal | None, Decimal | None]:
         """Return (min, max, avg) for `values`, or `(None, None, None)` when empty."""
@@ -443,7 +485,6 @@ class ImportService:
         started = time.perf_counter()
         request, dropped = _parse_sync_request(raw)
         validation_ms = round((time.perf_counter() - started) * 1000, 1)
-        user_uuid = UUID(user_id)
         workouts_saved = 0
         meals_saved = 0
         records_saved = 0
@@ -452,36 +493,50 @@ class ImportService:
         sleep_saved = 0
         types: set[str] = set()
 
+        # Split records[] once into correlations (meal, and whatever future correlation
+        # types CORRELATION_LINKABLE_SERIES_TYPES grows) vs everything else, instead of each
+        # builder re-scanning the full list and skipping what the other one handles.
+        # correlation_type_by_external_id lets _build_statistic_bundles check a child's own
+        # type against the SPECIFIC correlation it's linking to, not just "some correlation".
+        correlation_records: list[MetricRecord] = []
+        records: list[MetricRecord] = []
+        correlation_type_by_external_id: dict[str, str] = {}
+        for rjson in request.data.records:
+            record_type = rjson.type or ""
+            if record_type in CORRELATION_LINKABLE_SERIES_TYPES:
+                correlation_records.append(rjson)
+                if rjson.id:
+                    correlation_type_by_external_id[rjson.id] = record_type
+            else:
+                records.append(rjson)
+
         # Process meal correlations first, so
         # their internal ids exist before nutrient samples try to link to them.
-        meal_bundles = list(self._build_meal_bundles(request, user_id))
+        meal_bundles = list(self._build_meal_bundles(correlation_records, request.provider, user_id))
         correlation_id_map: dict[str, UUID] = {}
-        if meal_bundles:
-            meal_records, meal_details = zip(*meal_bundles)
-            meal_details_by_id = {detail.record_id: detail for detail in meal_details}
-
-            inserted_meal_ids = set(self.event_record_service.bulk_create(db_session, list(meal_records)))
-            db_session.flush()
-            meals_saved = len(inserted_meal_ids)
-
-            details_to_insert = [meal_details_by_id[m] for m in inserted_meal_ids if m in meal_details_by_id]
-            if details_to_insert:
-                self.event_record_service.bulk_create_details(db_session, details_to_insert, detail_type="meal")
-
-            for record in meal_records:
-                if not record.external_id:
-                    continue
-                if record.id in inserted_meal_ids:
-                    correlation_id_map[record.external_id] = record.id
-                    continue
-                # Not newly inserted: this meal was already synced in an earlier batch
-                # (idempotent re-sync). Resolve its real DB id so this batch's samples
-                # still link to the correct meal instead of silently staying loose.
-                existing = self.event_record_service.crud.get_by_external_id(
-                    db_session, user_uuid, record.external_id, provider=record.provider
+        meal_ids: set[UUID] = set()
+        for record, detail in meal_bundles:
+            try:
+                saved, inserted = self.event_record_service.create_or_update_meal(db_session, record, detail)
+            except IntegrityError:
+                log_structured(
+                    self.log,
+                    "warning",
+                    "SDK meal correlation could not be reconciled - skipping",
+                    action="sdk_meal_conflict_skipped",
+                    batch_id=batch_id,
+                    user_id=user_id,
+                    provider=request.provider,
+                    external_id=record.external_id,
+                    start_datetime=record.start_datetime.isoformat(),
+                    end_datetime=record.end_datetime.isoformat(),
                 )
-                if existing:
-                    correlation_id_map[record.external_id] = existing.id
+                continue
+            if inserted:
+                meals_saved += 1
+            meal_ids.add(saved.id)
+            if record.external_id:
+                correlation_id_map[record.external_id] = saved.id
 
         # Process workouts in batch
         workout_bundles = list(self._build_workout_bundles(request, user_id))
@@ -512,8 +567,12 @@ class ImportService:
                 types.update(sample.series_type.value for sample in time_series_samples)
 
         # Process time series samples (records)
-        samples = self._build_statistic_bundles(request, user_id, correlation_id_map)
+        samples = self._build_statistic_bundles(
+            records, request.provider, user_id, correlation_id_map, correlation_type_by_external_id
+        )
         if samples:
+            self._reconcile_meal_samples(db_session, samples, meal_ids)
+
             counts = self.timeseries_service.bulk_create_samples(db_session, samples)
             records_saved += len(samples)
             records_inserted += counts.inserted

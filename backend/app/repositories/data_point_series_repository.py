@@ -1,4 +1,5 @@
 import contextlib
+from collections.abc import Iterable
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import LiteralString, NamedTuple
@@ -198,6 +199,20 @@ class DataPointSeriesRepository(
         creation = self.model(**creation_data)
         db_session.add(creation)
         return self.try_commit(db_session, creation)
+
+    def delete_stale_for_event_record(
+        self, db_session: DbSession, event_record_id: UUID, keep_series_type_ids: Iterable[int]
+    ) -> int:
+        """Delete this record's samples whose series type isn't in keep_series_type_ids.
+        Returns the number of rows deleted."""
+        return (
+            db_session.query(self.model)
+            .filter(
+                self.model.event_record_id == event_record_id,
+                self.model.series_type_definition_id.notin_(list(keep_series_type_ids)),
+            )
+            .delete(synchronize_session=False)
+        )
 
     @handle_exceptions
     def bulk_create(self, db_session: DbSession, creators: list[TimeSeriesSampleCreate]) -> WriteCounts:

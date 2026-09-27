@@ -238,6 +238,39 @@ class EventRecordService(
             db_session, user_id, start_time, end_time, threshold_minutes, source=source, provider=provider
         )
 
+    def create_or_update_meal(
+        self,
+        db_session: DbSession,
+        record: EventRecordCreate,
+        detail: EventRecordDetailCreate,
+    ) -> tuple[EventRecord, bool]:
+        """Insert a meal, or refresh the one already stored for its data source and external id.
+
+        Inserts optimistically and lets ix_event_record_meal_source_external_id settle a
+        conflict, so a pull sync and a webhook racing to save the same meal serialize on that
+        unique index instead of both passing a plain existence check and duplicating the meal.
+
+        Flushes only - the caller commits, so the meal's nutrient samples can share the
+        transaction. Returns (record, is_inserted).
+        """
+        saved, is_inserted = self.crud.create_and_flush_meal(db_session, record)
+        if is_inserted:
+            self.event_record_detail_repo.create_and_flush(
+                db_session, detail.model_copy(update={"record_id": saved.id}), detail_type="meal"
+            )
+            return saved, True
+
+        saved.start_datetime = record.start_datetime
+        saved.end_datetime = record.end_datetime
+        saved.duration_seconds = record.duration_seconds
+        saved.zone_offset = record.zone_offset
+        db_session.flush()
+        self.event_record_detail_repo.delete_by_record_id(db_session, saved.id, "meal")
+        self.event_record_detail_repo.create_and_flush(
+            db_session, detail.model_copy(update={"record_id": saved.id}), detail_type="meal"
+        )
+        return saved, False
+
     def create_or_merge_sleep(
         self,
         db_session: DbSession,

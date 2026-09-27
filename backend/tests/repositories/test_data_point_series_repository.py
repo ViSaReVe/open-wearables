@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 
 from app.models import DataPointSeries, DataSource
 from app.repositories.data_point_series_repository import DataPointSeriesRepository
-from app.schemas.enums import SeriesType
+from app.schemas.enums import SeriesType, get_series_type_id
 from app.schemas.model_crud.activities import TimeSeriesQueryParams, TimeSeriesSampleCreate
 from tests.factories import DataSourceFactory, EventRecordFactory, UserFactory
 
@@ -971,3 +971,97 @@ class TestDataPointSeriesRepository:
         by_source = {r["source"]: r["steps_sum"] for r in result}
         assert by_source["garmin"] == 10000
         assert by_source["apple"] == 8000
+
+
+class TestDeleteStaleForEventRecord:
+    """data_point_series is one shared table for every category's samples (meal, sleep,
+    workout, ...). event_record_id is a foreign key to event_record.id - a single,
+    globally-unique primary key across all categories - so scoping a delete on it can never
+    leak into another record's rows, even though they all sit in the same table and column."""
+
+    @pytest.fixture
+    def series_repo(self) -> DataPointSeriesRepository:
+        return DataPointSeriesRepository(DataPointSeries)
+
+    def test_only_deletes_rows_linked_to_the_given_event_record(
+        self, db: Session, series_repo: DataPointSeriesRepository
+    ) -> None:
+        user = UserFactory()
+        data_source = DataSourceFactory(user=user)
+        meal = EventRecordFactory(data_source=data_source, category="meal")
+        sleep = EventRecordFactory(data_source=data_source, category="sleep")
+        now = datetime.now(timezone.utc)
+
+        def _sample(recorded_at: datetime, series_type: SeriesType, event_record_id: UUID) -> TimeSeriesSampleCreate:
+            return TimeSeriesSampleCreate(
+                id=uuid4(),
+                user_id=user.id,
+                source=data_source.source,
+                device_model=data_source.device_model,
+                data_source_id=data_source.id,
+                recorded_at=recorded_at,
+                value=Decimal("10"),
+                series_type=series_type,
+                event_record_id=event_record_id,
+            )
+
+        meal_sample_id = series_repo.create(db, _sample(now, SeriesType.dietary_protein, meal.id)).id
+        sleep_sample_id = series_repo.create(
+            db, _sample(now - timedelta(hours=1), SeriesType.heart_rate, sleep.id)
+        ).id
+
+        # keep_series_type_ids=[] means "the meal no longer reports any nutrient type" -
+        # the most aggressive possible delete-stale call - yet it must still leave the
+        # sleep-linked row (a different event_record_id) untouched.
+        deleted = series_repo.delete_stale_for_event_record(db, meal.id, keep_series_type_ids=[])
+
+        assert deleted == 1
+        remaining_ids = {row.id for row in db.query(DataPointSeries.id).all()}
+        assert meal_sample_id not in remaining_ids
+        assert sleep_sample_id in remaining_ids
+
+    def test_keeps_reported_types_deletes_the_rest(
+        self, db: Session, series_repo: DataPointSeriesRepository
+    ) -> None:
+        user = UserFactory()
+        data_source = DataSourceFactory(user=user)
+        meal = EventRecordFactory(data_source=data_source, category="meal")
+        now = datetime.now(timezone.utc)
+
+        energy_id = series_repo.create(
+            db,
+            TimeSeriesSampleCreate(
+                id=uuid4(),
+                user_id=user.id,
+                source=data_source.source,
+                device_model=data_source.device_model,
+                data_source_id=data_source.id,
+                recorded_at=now,
+                value=Decimal("550"),
+                series_type=SeriesType.dietary_energy_consumed,
+                event_record_id=meal.id,
+            ),
+        ).id
+        protein_id = series_repo.create(
+            db,
+            TimeSeriesSampleCreate(
+                id=uuid4(),
+                user_id=user.id,
+                source=data_source.source,
+                device_model=data_source.device_model,
+                data_source_id=data_source.id,
+                recorded_at=now,
+                value=Decimal("38.2"),
+                series_type=SeriesType.dietary_protein,
+                event_record_id=meal.id,
+            ),
+        ).id
+
+        deleted = series_repo.delete_stale_for_event_record(
+            db, meal.id, keep_series_type_ids=[get_series_type_id(SeriesType.dietary_energy_consumed)]
+        )
+
+        assert deleted == 1
+        remaining_ids = {row.id for row in db.query(DataPointSeries.id).all()}
+        assert energy_id in remaining_ids
+        assert protein_id not in remaining_ids
