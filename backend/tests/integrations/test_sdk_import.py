@@ -15,7 +15,7 @@ import pytest
 from sqlalchemy.orm import Session
 
 from app.models import DataPointSeries, DataSource, EventRecord, MealDetails, WorkoutDetails
-from app.schemas.enums import SeriesType
+from app.schemas.enums import SeriesType, get_series_type_id
 from app.schemas.providers.mobile_sdk import SyncRequest as SDKSyncRequest
 from app.services.sdk.import_service import ImportService
 from tests.factories import UserFactory
@@ -1125,3 +1125,106 @@ class TestSDKImportMealCorrelation:
         meal = db.query(EventRecord).filter(EventRecord.category == "meal").one()
         sample = db.query(DataPointSeries).filter(DataPointSeries.external_id == "caffeine-1").one()
         assert sample.event_record_id == meal.id
+
+
+class TestSDKImportAndroidFoodCorrelation:
+    """Health Connect (Samsung Health / Google Health Connect) uses its own correlation
+    type ("FOOD") and its own dietary metric type names (DIETARY_ENERGY, DIETARY_PROTEIN,
+    ...) - distinct strings from Apple HealthKit, but the same grouping mechanism."""
+
+    @pytest.fixture
+    def import_service(self) -> ImportService:
+        return ImportService(log=logging.getLogger("test"))
+
+    def test_real_health_connect_payload_links_meal_and_nutrients(
+        self, db: Session, import_service: ImportService
+    ) -> None:
+        user = UserFactory()
+        user_id = str(user.id)
+        source = {
+            "appId": "com.example.nutrition",
+            "deviceId": None,
+            "deviceName": None,
+            "deviceManufacturer": None,
+            "deviceModel": None,
+            "deviceType": None,
+            "recordingMethod": "manual",
+        }
+        payload = {
+            "provider": "google",
+            "sdkVersion": "0.13.0",
+            "syncTimestamp": "2026-09-25T12:00:00Z",
+            "data": {
+                "records": [
+                    {
+                        "id": "meal-1",
+                        "type": "FOOD",
+                        "startDate": "2026-09-25T18:30:00Z",
+                        "endDate": "2026-09-25T18:45:00Z",
+                        "zoneOffset": "+02:00",
+                        "source": source,
+                        "value": 1.0,
+                        "unit": None,
+                        "parentId": None,
+                        "metadata": {"title": "Chicken rice", "mealType": "dinner"},
+                    },
+                    {
+                        "id": "meal-1-energy",
+                        "type": "DIETARY_ENERGY",
+                        "startDate": "2026-09-25T18:30:00Z",
+                        "endDate": "2026-09-25T18:45:00Z",
+                        "zoneOffset": "+02:00",
+                        "source": source,
+                        "value": 550.0,
+                        "unit": "kcal",
+                        "parentId": "meal-1",
+                        "metadata": None,
+                    },
+                    {
+                        "id": "meal-1-protein",
+                        "type": "DIETARY_PROTEIN",
+                        "startDate": "2026-09-25T18:30:00Z",
+                        "endDate": "2026-09-25T18:45:00Z",
+                        "zoneOffset": "+02:00",
+                        "source": source,
+                        "value": 32.0,
+                        "unit": "g",
+                        "parentId": "meal-1",
+                        "metadata": None,
+                    },
+                    {
+                        "id": "meal-1-caffeine",
+                        "type": "DIETARY_CAFFEINE",
+                        "startDate": "2026-09-25T18:30:00Z",
+                        "endDate": "2026-09-25T18:45:00Z",
+                        "zoneOffset": "+02:00",
+                        "source": source,
+                        "value": 40.0,
+                        "unit": "mg",
+                        "parentId": "meal-1",
+                        "metadata": None,
+                    },
+                ],
+                "workouts": [],
+                "sleep": [],
+            },
+        }
+
+        result = import_service.load_data(db, payload, user_id)
+        assert result["meals_saved"] == 1
+
+        meal = db.query(EventRecord).filter(EventRecord.category == "meal").one()
+        assert meal.external_id == "meal-1"
+        detail = db.query(MealDetails).filter(MealDetails.record_id == meal.id).one()
+        assert detail.title == "Chicken rice"
+        assert detail.meal_type == "dinner"
+
+        samples = db.query(DataPointSeries).join(DataSource).filter(DataSource.user_id == user.id).all()
+        samples_by_external_id = {s.external_id: s for s in samples}
+
+        assert samples_by_external_id["meal-1-energy"].event_record_id == meal.id
+        assert samples_by_external_id["meal-1-energy"].series_type_definition_id == get_series_type_id(
+            SeriesType.dietary_energy_consumed
+        )
+        assert samples_by_external_id["meal-1-protein"].event_record_id == meal.id
+        assert samples_by_external_id["meal-1-caffeine"].event_record_id == meal.id

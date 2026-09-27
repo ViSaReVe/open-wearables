@@ -57,12 +57,16 @@ from .sleep_service import handle_sleep_data
 # in mg/dL round-trip with a ~0.1% offset under this factor.
 MMOL_L_TO_MG_DL = Decimal("18.0182")
 
+# Dietary series types plus hydration.
+_MEAL_NUTRIENT_SERIES_TYPES = frozenset(
+    {st for st in SeriesType if st.value.startswith("dietary_")} | {SeriesType.hydration}
+)
+
 # Correlation types: parent records that carry no measurement of their own, but group
 # sibling records that reference them via their own `parentId`.
 CORRELATION_LINKABLE_SERIES_TYPES: dict[str, frozenset[SeriesType]] = {
-    "HKCorrelationTypeIdentifierFood": frozenset(
-        {st for st in SeriesType if st.value.startswith("dietary_")} | {SeriesType.hydration}
-    ),
+    "HKCorrelationTypeIdentifierFood": _MEAL_NUTRIENT_SERIES_TYPES,
+    "FOOD": _MEAL_NUTRIENT_SERIES_TYPES,
 }
 
 _SDK_ITEM_MODELS = (("records", MetricRecord), ("sleep", SleepRecord), ("workouts", Workout))
@@ -360,7 +364,7 @@ class ImportService:
 
         return time_series_samples
 
-    def _reconcile_meal_samples(
+    def _prune_stale_meal_samples(
         self,
         db_session: DbSession,
         samples: list[HeartRateSampleCreate | StepSampleCreate | TimeSeriesSampleCreate],
@@ -571,7 +575,7 @@ class ImportService:
             records, request.provider, user_id, correlation_id_map, correlation_type_by_external_id
         )
         if samples:
-            self._reconcile_meal_samples(db_session, samples, meal_ids)
+            self._prune_stale_meal_samples(db_session, samples, meal_ids)
 
             counts = self.timeseries_service.bulk_create_samples(db_session, samples)
             records_saved += len(samples)
