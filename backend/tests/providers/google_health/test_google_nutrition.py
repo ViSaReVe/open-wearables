@@ -1,10 +1,10 @@
 """Google Health API nutrition-log handler.
 
 A nutrition-log DataPoint carries one food item (mealType, foodDisplayName) plus a handful
-of nutrient values. Items sharing a source and start time are folded into one meal - the
-same shape the SDK/HealthKit "Food" correlation path already models as a meal EventRecord
-+ linked DataPointSeries samples. These tests cover the mapping from Google's wire shape to
-that model, without touching a real database.
+of nutrient values. Items sharing a source, start time, and meal type are folded into one
+meal - the same shape the SDK/HealthKit "Food" correlation path already models as a meal
+EventRecord + linked DataPointSeries samples. These tests cover the mapping from Google's
+wire shape to that model, without touching a real database.
 """
 
 from datetime import datetime, timedelta, timezone
@@ -112,7 +112,7 @@ class TestNutrients:
 
 
 class TestGrouping:
-    """Google emits one point per food item; items of one meal share a source and start time."""
+    """Google emits one point per food item; items of one meal share a source, start time, and meal type."""
 
     def test_same_start_items_fold_into_one_meal_with_summed_nutrients(
         self, nutrition: GoogleHealthApiNutrition
@@ -129,6 +129,18 @@ class TestGrouping:
         assert meal.nutrients[SeriesType.dietary_energy_consumed] == Decimal("400")
         assert meal.nutrients[SeriesType.dietary_protein] == Decimal("93")  # 31 x 3
         assert meal.meal_type == "lunch"
+
+    def test_same_start_items_with_different_meal_type_stay_separate_meals(
+        self, nutrition: GoogleHealthApiNutrition
+    ) -> None:
+        """Same device and start time, but a different mealType, must not be folded together."""
+        lunch = _point("a", mealType="LUNCH")
+        dinner = _point("b", mealType="DINNER")
+
+        groups = nutrition._group_entries([lunch, dinner], *WINDOW)
+
+        assert {g.meal_type for g in groups} == {"lunch", "dinner"}
+        assert len(groups) == 2
 
     def test_items_at_different_start_times_stay_separate_meals(self, nutrition: GoogleHealthApiNutrition) -> None:
         dinner = _point("b", interval=_interval(START + timedelta(hours=1)))
