@@ -160,7 +160,10 @@ class MealConfig(BaseModel):
     fiber, hydration) correlated to it via event_record_id.
     """
 
-    meal_count: int = Field(60, ge=0, le=1000)
+    meals_per_day_range: IntRange = Field(
+        IntRange(3, 5),
+        description="Random number of meals generated for each day in the date range.",
+    )
     meal_types: list[str] | None = Field(
         None, description="Specific meal types to generate. None = random from breakfast/lunch/dinner/snack."
     )
@@ -171,17 +174,25 @@ class MealConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_ranges(self) -> "MealConfig":
-        """Validate calories_range and the date range.
+        """Validate calories_range, meals_per_day_range, and the date range.
 
-        calories_range has no Field-level ge/le constraints (unlike the other
-        IntRange fields on WorkoutConfig/SleepConfig), so the >= 0 check has to
-        happen here instead.
+        Neither IntRange has Field-level ge/le constraints (unlike the other
+        IntRange fields on WorkoutConfig/SleepConfig), so the checks happen here.
         """
         if self.calories_range.min > self.calories_range.max:
             msg = f"calories_range min ({self.calories_range.min}) must be <= max ({self.calories_range.max})"
             raise ValueError(msg)
         if self.calories_range.min < 0:
             msg = f"calories_range min ({self.calories_range.min}) must be >= 0"
+            raise ValueError(msg)
+        if self.meals_per_day_range.min > self.meals_per_day_range.max:
+            msg = (
+                f"meals_per_day_range min ({self.meals_per_day_range.min}) "
+                f"must be <= max ({self.meals_per_day_range.max})"
+            )
+            raise ValueError(msg)
+        if self.meals_per_day_range.min < 0:
+            msg = f"meals_per_day_range min ({self.meals_per_day_range.min}) must be >= 0"
             raise ValueError(msg)
         if self.date_from and self.date_to and self.date_from > self.date_to:
             msg = f"date_from ({self.date_from}) must be <= date_to ({self.date_to})"
@@ -520,7 +531,6 @@ SEED_PRESETS: dict[str, dict] = {
                 include_blood_pressure=True,
             ),
             generate_meals=True,
-            meal_config=MealConfig(meal_count=90),
         ),
     },
     "nutrition_focused": {
@@ -533,7 +543,7 @@ SEED_PRESETS: dict[str, dict] = {
             generate_time_series=False,
             workout_config=WorkoutConfig(count=10),
             generate_meals=True,
-            meal_config=MealConfig(meal_count=180),
+            meal_config=MealConfig(meals_per_day_range=(3, 3)),
         ),
     },
 }

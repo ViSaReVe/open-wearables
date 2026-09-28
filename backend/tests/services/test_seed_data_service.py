@@ -387,7 +387,11 @@ class TestMealGeneration:
                 providers=[ProviderName.APPLE],
                 num_connections=1,
                 generate_meals=True,
-                meal_config=MealConfig(meal_count=5),
+                meal_config=MealConfig(
+                    meals_per_day_range=(5, 5),
+                    date_from=date(2024, 6, 1),
+                    date_to=date(2024, 6, 1),
+                ),
             ),
         )
 

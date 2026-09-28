@@ -19,7 +19,14 @@ from app.schemas.model_crud.activities import (
 from app.schemas.model_crud.activities.sleep import SleepStage
 from app.schemas.utils.seed_data import SLEEP_STAGE_PROFILES, MealConfig, SleepConfig, WorkoutConfig
 
-from .constants import DEFAULT_MEAL_TYPES, GENDERS, MEAL_TITLES, OUTDOOR_WORKOUT_TYPES, PROVIDER_CONFIGS
+from .constants import (
+    DEFAULT_MEAL_TYPES,
+    GENDERS,
+    MEAL_TIME_WINDOWS,
+    MEAL_TITLES,
+    OUTDOOR_WORKOUT_TYPES,
+    PROVIDER_CONFIGS,
+)
 
 
 def _resolve_date_bounds(
@@ -307,31 +314,41 @@ def _generate_meal(
     user_id: UUID,
     fake: Faker,
     provider: ProviderName,
-    last_synced_at: datetime,
+    day: date,
     config: MealConfig,
+    used_timestamps: set[datetime],
 ) -> tuple[EventRecordCreate, MealDetailCreate, list[TimeSeriesSampleCreate]]:
-    """Generate a single meal: an EventRecord + MealDetails + correlated nutrient samples.
+    """Generate a single meal on *day*: an EventRecord + MealDetails + correlated nutrient samples.
 
     Nutrient values (calories, protein, carbs, fat, fiber, hydration) are emitted as
     DataPointSeries samples linked back to the meal via event_record_id, mirroring how
     real HealthKit/Health Connect meal correlations are stored (see MealDetails docstring).
-    """
-    start_bound, end_bound = _resolve_date_bounds(
-        config.date_from,
-        config.date_to,
-        config.date_range_months,
-        last_synced_at,
-    )
-    start_datetime = fake.date_time_between(
-        start_date=start_bound,
-        end_date=end_bound,
-        tzinfo=timezone.utc,
-    )
-    end_datetime = start_datetime + timedelta(minutes=fake.random_int(min=5, max=30))
 
+    ``start_datetime`` is drawn from a realistic time-of-day window for the chosen meal
+    type and retried against *used_timestamps* (the provider's already-used recorded_at
+    values so far) until unique. Without this, two meals for the same provider landing
+    on the same recorded_at would collide on the (data_source_id,
+    series_type_definition_id, recorded_at) upsert key, and the earlier meal's nutrient
+    samples would silently be overwritten and re-linked to the later meal.
+    """
     meal_types = config.meal_types or list(DEFAULT_MEAL_TYPES)
     meal_type = fake.random.choice(meal_types)
     title = fake.random.choice(MEAL_TITLES.get(meal_type, MEAL_TITLES["snack"]))
+
+    (start_h, start_m), (end_h, end_m) = MEAL_TIME_WINDOWS.get(meal_type, MEAL_TIME_WINDOWS["snack"])
+    window_start = datetime(day.year, day.month, day.day, start_h, start_m, tzinfo=timezone.utc)
+    window_end = datetime(day.year, day.month, day.day, end_h, end_m, tzinfo=timezone.utc)
+
+    start_datetime = fake.date_time_between(start_date=window_start, end_date=window_end, tzinfo=timezone.utc)
+    attempts = 0
+    while start_datetime in used_timestamps and attempts < 20:
+        start_datetime = fake.date_time_between(start_date=window_start, end_date=window_end, tzinfo=timezone.utc)
+        attempts += 1
+    while start_datetime in used_timestamps:
+        start_datetime += timedelta(seconds=1)
+    used_timestamps.add(start_datetime)
+
+    end_datetime = start_datetime + timedelta(minutes=fake.random_int(min=5, max=30))
 
     calories = fake.random_int(min=config.calories_range.min, max=config.calories_range.max)
     protein_pct = fake.random.uniform(0.15, 0.30)

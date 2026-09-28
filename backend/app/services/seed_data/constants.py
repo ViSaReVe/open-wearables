@@ -87,6 +87,17 @@ MEAL_TITLES: dict[str, list[str]] = {
     "snack": ["Protein Bar", "Mixed Nuts", "Apple with Peanut Butter", "Greek Yogurt"],
 }
 
+# Realistic local time-of-day window ((start_hour, start_minute), (end_hour, end_minute))
+# per meal type. Meals are placed within their type's window instead of anywhere in the
+# full date range, which keeps generated data plausible and keeps same-provider,
+# same-day meals of different types from landing on the same recorded_at.
+MEAL_TIME_WINDOWS: dict[str, tuple[tuple[int, int], tuple[int, int]]] = {
+    "breakfast": ((6, 0), (9, 30)),
+    "lunch": ((11, 30), (14, 0)),
+    "dinner": ((18, 0), (21, 0)),
+    "snack": ((9, 0), (22, 0)),
+}
+
 # ---------------------------------------------------------------------------
 # Health score component keys (match real provider API formats)
 # ---------------------------------------------------------------------------
