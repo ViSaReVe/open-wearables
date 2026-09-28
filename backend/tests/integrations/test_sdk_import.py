@@ -1232,13 +1232,11 @@ class TestSDKImportAndroidFoodCorrelation:
 
     def test_new_dietary_types_added_for_health_connect_resolve(self) -> None:
         """Regression test: DIETARY_TRANS_FAT, DIETARY_ENERGY_FROM_FAT,
-        DIETARY_UNSATURATED_FAT and DIETARY_FOLIC_ACID have no HealthKit counterpart
-        (Health Connect only), except trans fat, which Apple also reports."""
+        DIETARY_UNSATURATED_FAT and DIETARY_FOLIC_ACID have no HealthKit counterpart -
+        HealthKit has no dietary trans fat identifier at all, so this is Health
+        Connect/Samsung only, unlike the others which are Health Connect only."""
         assert get_series_type_from_metric_type("DIETARY_TRANS_FAT") == SeriesType.dietary_fat_trans
-        assert (
-            get_series_type_from_metric_type("HKQuantityTypeIdentifierDietaryFatTrans")
-            == SeriesType.dietary_fat_trans
-        )
+        assert get_series_type_from_metric_type("HKQuantityTypeIdentifierDietaryFatTrans") is None
         assert get_series_type_from_metric_type("DIETARY_ENERGY_FROM_FAT") == SeriesType.dietary_energy_from_fat
         assert get_series_type_from_metric_type("DIETARY_UNSATURATED_FAT") == SeriesType.dietary_fat_unsaturated
         assert get_series_type_from_metric_type("DIETARY_FOLIC_ACID") == SeriesType.dietary_folic_acid
