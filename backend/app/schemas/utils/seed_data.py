@@ -15,6 +15,14 @@ class IntRange(NamedTuple):
     max: int
 
 
+MAX_MEAL_CALORIES = 5000
+"""Upper bound for MealConfig.calories_range, generous for a single meal.
+
+Keeps calories, and the protein/fat/carb grams derived from it in
+_generate_meal, within a range the downstream math can't overflow on.
+"""
+
+
 class WorkoutConfig(BaseModel):
     """Parameters controlling workout generation."""
 
@@ -178,12 +186,17 @@ class MealConfig(BaseModel):
 
         Neither IntRange has Field-level ge/le constraints (unlike the other
         IntRange fields on WorkoutConfig/SleepConfig), so the checks happen here.
+        calories_range is additionally capped at MAX_MEAL_CALORIES to prevent
+        overflow in the downstream calorie-to-macro math in _generate_meal.
         """
         if self.calories_range.min > self.calories_range.max:
             msg = f"calories_range min ({self.calories_range.min}) must be <= max ({self.calories_range.max})"
             raise ValueError(msg)
-        if self.calories_range.min < 0:
-            msg = f"calories_range min ({self.calories_range.min}) must be >= 0"
+        if not (0 <= self.calories_range.min and self.calories_range.max <= MAX_MEAL_CALORIES):
+            msg = (
+                f"calories_range ({self.calories_range.min}, {self.calories_range.max}) "
+                f"must be within [0, {MAX_MEAL_CALORIES}]"
+            )
             raise ValueError(msg)
         if self.meals_per_day_range.min > self.meals_per_day_range.max:
             msg = (
