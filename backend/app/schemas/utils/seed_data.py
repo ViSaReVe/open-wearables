@@ -22,6 +22,14 @@ Keeps calories, and the protein/fat/carb grams derived from it in
 _generate_meal, within a range the downstream math can't overflow on.
 """
 
+MAX_MEALS_PER_DAY = 10
+"""Upper bound for MealConfig.meals_per_day_range.
+
+meals_per_day is drawn once per day and used directly as a loop bound in
+SeedDataService.generate (one insert + up to ~6 sample rows per meal), so an
+unbounded value here is a direct row-count explosion, not just a bad value.
+"""
+
 
 class WorkoutConfig(BaseModel):
     """Parameters controlling workout generation."""
@@ -204,8 +212,11 @@ class MealConfig(BaseModel):
                 f"must be <= max ({self.meals_per_day_range.max})"
             )
             raise ValueError(msg)
-        if self.meals_per_day_range.min < 0:
-            msg = f"meals_per_day_range min ({self.meals_per_day_range.min}) must be >= 0"
+        if not (0 <= self.meals_per_day_range.min and self.meals_per_day_range.max <= MAX_MEALS_PER_DAY):
+            msg = (
+                f"meals_per_day_range ({self.meals_per_day_range.min}, {self.meals_per_day_range.max}) "
+                f"must be within [0, {MAX_MEALS_PER_DAY}]"
+            )
             raise ValueError(msg)
         if self.date_from and self.date_to and self.date_from > self.date_to:
             msg = f"date_from ({self.date_from}) must be <= date_to ({self.date_to})"
