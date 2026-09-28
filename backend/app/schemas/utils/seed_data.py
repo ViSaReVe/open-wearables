@@ -22,12 +22,12 @@ Keeps calories, and the protein/fat/carb grams derived from it in
 _generate_meal, within a range the downstream math can't overflow on.
 """
 
-MAX_MEALS_PER_DAY = 10
-"""Upper bound for MealConfig.meals_per_day_range.
+MAX_MEAL_COUNT = 10_000
+"""Upper bound for MealConfig.meal_count.
 
-meals_per_day is drawn once per day and used directly as a loop bound in
-SeedDataService.generate (one insert + up to ~6 sample rows per meal), so an
-unbounded value here is a direct row-count explosion, not just a bad value.
+meal_count is used directly as the number of insert + up to ~6 sample rows in
+SeedDataService.generate, so an unbounded value here is a direct row-count
+explosion, not just a bad value.
 """
 
 
@@ -176,46 +176,27 @@ class MealConfig(BaseModel):
     fiber, hydration) correlated to it via event_record_id.
     """
 
-    meals_per_day_range: IntRange = Field(
-        IntRange(3, 5),
-        description="Random number of meals generated for each day in the date range.",
-    )
-    meal_types: list[str] | None = Field(
-        None, description="Specific meal types to generate. None = random from breakfast/lunch/dinner/snack."
-    )
+    meal_count: int = Field(50, ge=0, le=MAX_MEAL_COUNT, description="Total number of meals to generate.")
     calories_range: IntRange = IntRange(150, 900)
-    date_range_months: int = Field(6, ge=1, le=24)
-    date_from: date | None = Field(None, description="Explicit start date. Overrides date_range_months.")
-    date_to: date | None = Field(None, description="Explicit end date. Overrides date_range_months.")
+    date_from: date | None = Field(None, description="Explicit start date. Defaults to a 6-month lookback.")
+    date_to: date | None = Field(None, description="Explicit end date. Defaults to the last synced date.")
 
     @model_validator(mode="after")
     def _validate_ranges(self) -> "MealConfig":
-        """Validate calories_range, meals_per_day_range, and the date range.
+        """Validate calories_range and the date range.
 
-        Neither IntRange has Field-level ge/le constraints (unlike the other
-        IntRange fields on WorkoutConfig/SleepConfig), so the checks happen here.
-        calories_range is additionally capped at MAX_MEAL_CALORIES to prevent
-        overflow in the downstream calorie-to-macro math in _generate_meal.
+        calories_range has no Field-level ge/le constraints (it's an IntRange, unlike
+        the plain-int fields on WorkoutConfig/SleepConfig), so the check happens here,
+        capped at MAX_MEAL_CALORIES to prevent overflow in the downstream
+        calorie-to-macro math in _generate_meal.
         """
         if self.calories_range.min > self.calories_range.max:
             msg = f"calories_range min ({self.calories_range.min}) must be <= max ({self.calories_range.max})"
             raise ValueError(msg)
-        if not (0 <= self.calories_range.min and self.calories_range.max <= MAX_MEAL_CALORIES):
+        if not (self.calories_range.min >= 0 and self.calories_range.max <= MAX_MEAL_CALORIES):
             msg = (
                 f"calories_range ({self.calories_range.min}, {self.calories_range.max}) "
                 f"must be within [0, {MAX_MEAL_CALORIES}]"
-            )
-            raise ValueError(msg)
-        if self.meals_per_day_range.min > self.meals_per_day_range.max:
-            msg = (
-                f"meals_per_day_range min ({self.meals_per_day_range.min}) "
-                f"must be <= max ({self.meals_per_day_range.max})"
-            )
-            raise ValueError(msg)
-        if not (0 <= self.meals_per_day_range.min and self.meals_per_day_range.max <= MAX_MEALS_PER_DAY):
-            msg = (
-                f"meals_per_day_range ({self.meals_per_day_range.min}, {self.meals_per_day_range.max}) "
-                f"must be within [0, {MAX_MEALS_PER_DAY}]"
             )
             raise ValueError(msg)
         if self.date_from and self.date_to and self.date_from > self.date_to:
@@ -559,7 +540,7 @@ SEED_PRESETS: dict[str, dict] = {
     },
     "nutrition_focused": {
         "label": "Nutrition Focused",
-        "description": "3 meals/day of logged nutrition data, light workouts, no sleep.",
+        "description": "540 logged meals (~3/day over 6 months) of nutrition data, light workouts, no sleep.",
         "profile": SeedProfileConfig(
             preset="nutrition_focused",
             generate_workouts=True,
@@ -567,7 +548,7 @@ SEED_PRESETS: dict[str, dict] = {
             generate_time_series=False,
             workout_config=WorkoutConfig(count=10),
             generate_meals=True,
-            meal_config=MealConfig(meals_per_day_range=(3, 3)),
+            meal_config=MealConfig(meal_count=540),
         ),
     },
 }

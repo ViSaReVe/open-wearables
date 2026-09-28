@@ -22,7 +22,6 @@ from app.schemas.utils.seed_data import SLEEP_STAGE_PROFILES, MealConfig, SleepC
 from .constants import (
     DEFAULT_MEAL_TYPES,
     GENDERS,
-    MEAL_TIME_WINDOWS,
     MEAL_TITLES,
     OUTDOOR_WORKOUT_TYPES,
     PROVIDER_CONFIGS,
@@ -310,43 +309,42 @@ def _generate_personal_record(user_id: UUID, fake: Faker) -> PersonalRecordCreat
     )
 
 
+def _generate_spread_timestamps(fake: Faker, start: datetime, end: datetime, count: int) -> list[datetime]:
+    """Generate *count* timestamps spread across [start, end] via stratified sampling.
+
+    Splits [start, end] into *count* equal-width, non-overlapping buckets and draws one
+    random timestamp per bucket. This avoids both the clustering that plain i.i.d.
+    uniform sampling can produce and the duplicate-timestamp handling it would need -
+    buckets never overlap, so two draws can never collide (short of astronomically
+    unlikely microsecond ties within the same bucket).
+    """
+    if count <= 0:
+        return []
+    bucket_width = (end - start) / count
+    return [
+        start + i * bucket_width + timedelta(seconds=fake.random.uniform(0, bucket_width.total_seconds()))
+        for i in range(count)
+    ]
+
+
 def _generate_meal(
     user_id: UUID,
     fake: Faker,
     provider: ProviderName,
-    day: date,
+    start_datetime: datetime,
     config: MealConfig,
-    used_timestamps: set[datetime],
 ) -> tuple[EventRecordCreate, MealDetailCreate, list[TimeSeriesSampleCreate], dict[SeriesType, Decimal]]:
-    """Generate a single meal on *day*: an EventRecord + MealDetails + correlated nutrient samples.
+    """Generate a single meal at *start_datetime*: an EventRecord + MealDetails + correlated nutrient samples.
 
     Nutrient values (calories, protein, carbs, fat, fiber, hydration) are emitted as
     DataPointSeries samples linked back to the meal via event_record_id, mirroring how
     real HealthKit/Health Connect meal correlations are stored (see MealDetails docstring).
 
-    ``start_datetime`` is drawn from a realistic time-of-day window for the chosen meal
-    type and retried against *used_timestamps* (the provider's already-used recorded_at
-    values so far) until unique. Without this, two meals for the same provider landing
-    on the same recorded_at would collide on the (data_source_id,
-    series_type_definition_id, recorded_at) upsert key, and the earlier meal's nutrient
-    samples would silently be overwritten and re-linked to the later meal.
+    Meal type (breakfast/lunch/dinner/snack) is picked fully at random, independent of
+    *start_datetime*'s time of day - this is seed/test data, not a realism simulation.
     """
-    meal_types = config.meal_types or list(DEFAULT_MEAL_TYPES)
-    meal_type = fake.random.choice(meal_types)
+    meal_type = fake.random.choice(DEFAULT_MEAL_TYPES)
     title = fake.random.choice(MEAL_TITLES.get(meal_type, MEAL_TITLES["snack"]))
-
-    (start_h, start_m), (end_h, end_m) = MEAL_TIME_WINDOWS.get(meal_type, MEAL_TIME_WINDOWS["snack"])
-    window_start = datetime(day.year, day.month, day.day, start_h, start_m, tzinfo=timezone.utc)
-    window_end = datetime(day.year, day.month, day.day, end_h, end_m, tzinfo=timezone.utc)
-
-    start_datetime = fake.date_time_between(start_date=window_start, end_date=window_end, tzinfo=timezone.utc)
-    attempts = 0
-    while start_datetime in used_timestamps and attempts < 20:
-        start_datetime = fake.date_time_between(start_date=window_start, end_date=window_end, tzinfo=timezone.utc)
-        attempts += 1
-    while start_datetime in used_timestamps:
-        start_datetime += timedelta(seconds=1)
-    used_timestamps.add(start_datetime)
 
     end_datetime = start_datetime + timedelta(minutes=fake.random_int(min=5, max=30))
 

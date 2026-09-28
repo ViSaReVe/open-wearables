@@ -76,8 +76,12 @@ OUTDOOR_WORKOUT_TYPES: frozenset[WorkoutType] = frozenset(
     }
 )
 
-# Meal generation: types used when MealConfig.meal_types is unset, and sample
-# titles picked per meal type when building a MealDetails row.
+# Meal generation: default lookback window when MealConfig.date_from/date_to are unset
+# (MealConfig has no date_range_months field - meal_count alone controls volume).
+MEAL_DEFAULT_LOOKBACK_MONTHS = 6
+
+# Types picked at random for each generated meal, and sample titles picked per meal
+# type when building a MealDetails row.
 DEFAULT_MEAL_TYPES: tuple[str, ...] = ("breakfast", "lunch", "dinner", "snack")
 
 MEAL_TITLES: dict[str, list[str]] = {
@@ -85,17 +89,6 @@ MEAL_TITLES: dict[str, list[str]] = {
     "lunch": ["Grilled Chicken Salad", "Turkey Sandwich", "Quinoa Bowl", "Vegetable Stir Fry"],
     "dinner": ["Salmon with Rice", "Pasta Bolognese", "Grilled Steak & Veggies", "Vegetable Curry"],
     "snack": ["Protein Bar", "Mixed Nuts", "Apple with Peanut Butter", "Greek Yogurt"],
-}
-
-# Realistic local time-of-day window ((start_hour, start_minute), (end_hour, end_minute))
-# per meal type. Meals are placed within their type's window instead of anywhere in the
-# full date range, which keeps generated data plausible and keeps same-provider,
-# same-day meals of different types from landing on the same recorded_at.
-MEAL_TIME_WINDOWS: dict[str, tuple[tuple[int, int], tuple[int, int]]] = {
-    "breakfast": ((6, 0), (9, 30)),
-    "lunch": ((11, 30), (14, 0)),
-    "dinner": ((18, 0), (21, 0)),
-    "snack": ((9, 0), (22, 0)),
 }
 
 # ---------------------------------------------------------------------------

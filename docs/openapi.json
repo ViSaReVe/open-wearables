@@ -13093,28 +13093,13 @@
       },
       "MealConfig": {
         "properties": {
-          "meals_per_day_range": {
-            "$ref": "#/components/schemas/IntRange",
-            "description": "Random number of meals generated for each day in the date range.",
-            "default": [
-              3,
-              5
-            ]
-          },
-          "meal_types": {
-            "anyOf": [
-              {
-                "items": {
-                  "type": "string"
-                },
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Meal Types",
-            "description": "Specific meal types to generate. None = random from breakfast/lunch/dinner/snack."
+          "meal_count": {
+            "type": "integer",
+            "maximum": 10000.0,
+            "minimum": 0.0,
+            "title": "Meal Count",
+            "description": "Total number of meals to generate.",
+            "default": 50
           },
           "calories_range": {
             "$ref": "#/components/schemas/IntRange",
@@ -13122,13 +13107,6 @@
               150,
               900
             ]
-          },
-          "date_range_months": {
-            "type": "integer",
-            "maximum": 24.0,
-            "minimum": 1.0,
-            "title": "Date Range Months",
-            "default": 6
           },
           "date_from": {
             "anyOf": [
@@ -13141,7 +13119,7 @@
               }
             ],
             "title": "Date From",
-            "description": "Explicit start date. Overrides date_range_months."
+            "description": "Explicit start date. Defaults to a 6-month lookback."
           },
           "date_to": {
             "anyOf": [
@@ -13154,12 +13132,12 @@
               }
             ],
             "title": "Date To",
-            "description": "Explicit end date. Overrides date_range_months."
+            "description": "Explicit end date. Defaults to the last synced date."
           }
         },
         "type": "object",
         "title": "MealConfig",
-        "description": "Parameters controlling meal generation.\n\nEach meal is an EventRecord (category=\"meal\") plus a MealDetails row and a\nhandful of nutrient DataPointSeries samples (calories, protein, carbs, fat,\nfiber, hydration) correlated to it via event_record_id."
+        "description": "Parameters controlling meal generation.\n\nEach meal is an EventRecord (category=\"meal\") plus a MealDetails row and a\nhandful of nutrient DataPointSeries samples (calories, protein, carbs, fat,\nfiber, hydration) correlated to it via event_record_id. Meal type (breakfast/\nlunch/dinner/snack) is always picked at random - a single flat meal_count is\nsimpler for a tester to reason about (\"give me 10k meals\") than a per-day\nrange combined with a separate date-window length."
       },
       "MealField": {
         "properties": {
@@ -14850,11 +14828,7 @@
                   150,
                   900
                 ],
-                "date_range_months": 6,
-                "meals_per_day_range": [
-                  3,
-                  5
-                ]
+                "meal_count": 50
               }
             }
           },
@@ -15046,15 +15020,11 @@
           "meal_config": {
             "$ref": "#/components/schemas/MealConfig",
             "default": {
-              "meals_per_day_range": [
-                3,
-                5
-              ],
+              "meal_count": 50,
               "calories_range": [
                 150,
                 900
-              ],
-              "date_range_months": 6
+              ]
             }
           }
         },

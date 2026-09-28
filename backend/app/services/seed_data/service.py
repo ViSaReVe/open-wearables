@@ -3,7 +3,6 @@
 import logging
 import os
 import random
-from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
 
 from faker import Faker
@@ -19,11 +18,12 @@ from app.services.health_score_service import health_score_service
 from app.services.timeseries_service import timeseries_service
 from app.services.user_service import user_service
 
-from .constants import PAIRED_SERIES_SPECS, PROVIDER_CONFIGS, SERIES_TYPE_SPECS, Cadence
+from .constants import MEAL_DEFAULT_LOOKBACK_MONTHS, PAIRED_SERIES_SPECS, PROVIDER_CONFIGS, SERIES_TYPE_SPECS, Cadence
 from .event_generators import (
     _generate_meal,
     _generate_personal_record,
     _generate_sleep,
+    _generate_spread_timestamps,
     _generate_workout,
     _resolve_date_bounds,
 )
@@ -196,45 +196,31 @@ class SeedDataService:
                     event_record_service.create_detail(db, detail, detail_type="sleep")
                     summary["sleeps"] += 1
 
-            # Meals (+ correlated nutrient samples): a random number of meals per day
-            # (meal_config.meals_per_day_range) rather than a flat total, so meal
-            # volume scales naturally with the date range instead of being spread
-            # thinly (or densely) across it regardless of how long it is.
             if profile.generate_meals and provider_sync_times:
                 last_synced_at = max(provider_sync_times.values())
                 meal_start, meal_end = _resolve_date_bounds(
                     profile.meal_config.date_from,
                     profile.meal_config.date_to,
-                    profile.meal_config.date_range_months,
+                    MEAL_DEFAULT_LOOKBACK_MONTHS,
                     last_synced_at,
                 )
-                # Tracks recorded_at values already used per provider so same-provider
-                # meals never collide on the data_point_series upsert key.
-                used_meal_timestamps: dict[ProviderName, set[datetime]] = defaultdict(set)
-                day = meal_start.date()
-                while day <= meal_end.date():
-                    meals_today = fake.random_int(
-                        min=profile.meal_config.meals_per_day_range.min,
-                        max=profile.meal_config.meals_per_day_range.max,
+                meal_timestamps = _generate_spread_timestamps(
+                    fake, meal_start, meal_end, profile.meal_config.meal_count
+                )
+                for start_datetime in meal_timestamps:
+                    prov = fake.random.choice(list(provider_sync_times.keys()))
+                    record, detail, nutrient_samples, nutrients = _generate_meal(
+                        user.id, fake, prov, start_datetime, profile.meal_config
                     )
-                    for _ in range(meals_today):
-                        prov = fake.random.choice(list(provider_sync_times.keys()))
-                        record, detail, nutrient_samples, nutrients = _generate_meal(
-                            user.id, fake, prov, day, profile.meal_config, used_meal_timestamps[prov]
-                        )
-                        # create_or_update_meal + schedule_meal_webhook (not create/create_detail):
-                        # MealDetailCreate carries no nutrient fields, so firing the webhook before
-                        # the samples below exist would send meal.created with null calories/macros.
-                        saved, inserted = event_record_service.create_or_update_meal(db, record, detail)
-                        summary["meals"] += 1
+                    saved, inserted = event_record_service.create_or_update_meal(db, record, detail)
+                    summary["meals"] += 1
 
-                        if nutrient_samples:
-                            timeseries_service.bulk_create_samples(db, nutrient_samples)
-                            summary["time_series_samples"] += len(nutrient_samples)
+                    if nutrient_samples:
+                        timeseries_service.bulk_create_samples(db, nutrient_samples)
+                        summary["time_series_samples"] += len(nutrient_samples)
 
-                        if inserted:
-                            event_record_service.schedule_meal_webhook(db, saved.id, record, detail, nutrients)
-                    day += timedelta(days=1)
+                    if inserted:
+                        event_record_service.schedule_meal_webhook(db, saved.id, record, detail, nutrients)
 
             # Continuous time series (independent of workouts)
             if profile.generate_time_series and provider_sync_times:
