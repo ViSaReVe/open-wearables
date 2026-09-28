@@ -171,6 +171,12 @@ class MealConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_ranges(self) -> "MealConfig":
+        """Validate calories_range and the date range.
+
+        calories_range has no Field-level ge/le constraints (unlike the other
+        IntRange fields on WorkoutConfig/SleepConfig), so the >= 0 check has to
+        happen here instead.
+        """
         if self.calories_range.min > self.calories_range.max:
             msg = f"calories_range min ({self.calories_range.min}) must be <= max ({self.calories_range.max})"
             raise ValueError(msg)

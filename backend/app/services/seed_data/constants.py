@@ -76,6 +76,8 @@ OUTDOOR_WORKOUT_TYPES: frozenset[WorkoutType] = frozenset(
     }
 )
 
+# Meal generation: types used when MealConfig.meal_types is unset, and sample
+# titles picked per meal type when building a MealDetails row.
 DEFAULT_MEAL_TYPES: tuple[str, ...] = ("breakfast", "lunch", "dinner", "snack")
 
 MEAL_TITLES: dict[str, list[str]] = {

@@ -1,4 +1,4 @@
-"""Generators for workout, sleep, and personal record seed data."""
+"""Generators for workout, sleep, meal, and personal record seed data."""
 
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
