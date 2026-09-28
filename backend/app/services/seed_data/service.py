@@ -219,16 +219,21 @@ class SeedDataService:
                     )
                     for _ in range(meals_today):
                         prov = fake.random.choice(list(provider_sync_times.keys()))
-                        record, detail, nutrient_samples = _generate_meal(
+                        record, detail, nutrient_samples, nutrients = _generate_meal(
                             user.id, fake, prov, day, profile.meal_config, used_meal_timestamps[prov]
                         )
-                        event_record_service.create(db, record)
-                        event_record_service.create_detail(db, detail, detail_type="meal")
+                        # create_or_update_meal + schedule_meal_webhook (not create/create_detail):
+                        # MealDetailCreate carries no nutrient fields, so firing the webhook before
+                        # the samples below exist would send meal.created with null calories/macros.
+                        saved, inserted = event_record_service.create_or_update_meal(db, record, detail)
                         summary["meals"] += 1
 
                         if nutrient_samples:
                             timeseries_service.bulk_create_samples(db, nutrient_samples)
                             summary["time_series_samples"] += len(nutrient_samples)
+
+                        if inserted:
+                            event_record_service.schedule_meal_webhook(db, saved.id, record, detail, nutrients)
                     day += timedelta(days=1)
 
             # Continuous time series (independent of workouts)

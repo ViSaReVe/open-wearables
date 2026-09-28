@@ -317,7 +317,7 @@ def _generate_meal(
     day: date,
     config: MealConfig,
     used_timestamps: set[datetime],
-) -> tuple[EventRecordCreate, MealDetailCreate, list[TimeSeriesSampleCreate]]:
+) -> tuple[EventRecordCreate, MealDetailCreate, list[TimeSeriesSampleCreate], dict[SeriesType, Decimal]]:
     """Generate a single meal on *day*: an EventRecord + MealDetails + correlated nutrient samples.
 
     Nutrient values (calories, protein, carbs, fat, fiber, hydration) are emitted as
@@ -394,6 +394,9 @@ def _generate_meal(
         SeriesType.dietary_fiber: fiber_g,
         SeriesType.hydration: float(fake.random_int(min=100, max=500)),
     }
+    nutrients: dict[SeriesType, Decimal] = {
+        series_type: Decimal(str(value)) for series_type, value in nutrient_values.items()
+    }
 
     samples = [
         TimeSeriesSampleCreate(
@@ -404,11 +407,11 @@ def _generate_meal(
             provider=provider.value,
             software_version=sw_version,
             recorded_at=start_datetime,
-            value=Decimal(str(value)),
+            value=value,
             series_type=series_type,
             event_record_id=meal_id,
         )
-        for series_type, value in nutrient_values.items()
+        for series_type, value in nutrients.items()
     ]
 
-    return record, detail, samples
+    return record, detail, samples, nutrients
