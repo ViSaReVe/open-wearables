@@ -1,10 +1,11 @@
 """Google Health API nutrition-log handler.
 
 A nutrition-log DataPoint carries one food item (mealType, foodDisplayName) plus a handful
-of nutrient values. Items sharing a source, start time, and meal type are folded into one
-meal - the same shape the SDK/HealthKit "Food" correlation path already models as a meal
-EventRecord + linked DataPointSeries samples. These tests cover the mapping from Google's
-wire shape to that model, without touching a real database.
+of nutrient values. Each DataPoint becomes its own, independent meal - the same shape the
+SDK/HealthKit "Food" correlation path already models as a meal EventRecord + linked
+DataPointSeries samples - keyed by Google's stable per-DataPoint resource ``name`` used
+verbatim as ``external_id``. These tests cover the mapping from Google's wire shape to
+that model, without touching a real database.
 """
 
 from datetime import datetime, timedelta, timezone
@@ -111,85 +112,75 @@ class TestNutrients:
         assert SeriesType.dietary_protein not in values
 
 
-class TestGrouping:
-    """Google emits one point per food item; items of one meal share a source, start time, and meal type."""
+class TestParsePoint:
+    """Every nutrition-log DataPoint becomes its own, independent meal - no folding across points."""
 
-    def test_same_start_items_fold_into_one_meal_with_summed_nutrients(
+    def test_a_point_becomes_a_meal_with_its_own_name_as_external_id(
         self, nutrition: GoogleHealthApiNutrition
     ) -> None:
-        chicken = _point("a", foodDisplayName="Chicken", energy={"kcal": 165})
-        rice = _point("b", foodDisplayName="Rice", energy={"kcal": 200})
-        salad = _point("c", foodDisplayName="Salad", energy={"kcal": 35})
+        point = _point("a", foodDisplayName="Chicken", mealType="LUNCH")
 
-        groups = nutrition._group_entries([chicken, rice, salad], *WINDOW)
+        meal = nutrition._parse_point(point, *WINDOW)
 
-        assert len(groups) == 1
-        meal = groups[0]
-        assert meal.title == "Chicken, Rice, Salad"
-        assert meal.nutrients[SeriesType.dietary_energy_consumed] == Decimal("400")
-        assert meal.nutrients[SeriesType.dietary_protein] == Decimal("93")  # 31 x 3
+        assert meal is not None
+        assert meal.external_id == point["name"]
+        assert meal.title == "Chicken"
         assert meal.meal_type == "lunch"
+        assert meal.device_model == "Pixel Fold"
+        assert meal.zone_offset == "+02:00"
+        assert meal.start == START
+        assert meal.nutrients[SeriesType.dietary_energy_consumed] == Decimal("165")
+        assert meal.nutrients[SeriesType.dietary_protein] == Decimal("31")
 
-    def test_same_start_items_with_different_meal_type_stay_separate_meals(
+    def test_two_points_with_identical_start_device_and_meal_type_are_two_separate_meals(
         self, nutrition: GoogleHealthApiNutrition
     ) -> None:
-        """Same device and start time, but a different mealType, must not be folded together."""
-        lunch = _point("a", mealType="LUNCH")
-        dinner = _point("b", mealType="DINNER")
+        """Even when start, device, and mealType all match, each DataPoint keeps its own identity."""
+        a = _point("a", foodDisplayName="Chicken")
+        b = _point("b", foodDisplayName="Rice")
 
-        groups = nutrition._group_entries([lunch, dinner], *WINDOW)
+        meal_a = nutrition._parse_point(a, *WINDOW)
+        meal_b = nutrition._parse_point(b, *WINDOW)
 
-        assert {g.meal_type for g in groups} == {"lunch", "dinner"}
-        assert len(groups) == 2
+        assert meal_a is not None
+        assert meal_b is not None
+        assert meal_a.external_id != meal_b.external_id
+        assert meal_a.external_id == a["name"]
+        assert meal_b.external_id == b["name"]
+        assert meal_a.title == "Chicken"
+        assert meal_b.title == "Rice"
+        # No summing across points - each nutrient set is that point's own.
+        assert meal_a.nutrients[SeriesType.dietary_energy_consumed] == Decimal("165")
+        assert meal_b.nutrients[SeriesType.dietary_energy_consumed] == Decimal("165")
 
-    def test_items_at_different_start_times_stay_separate_meals(self, nutrition: GoogleHealthApiNutrition) -> None:
-        dinner = _point("b", interval=_interval(START + timedelta(hours=1)))
-
-        groups = nutrition._group_entries([_point("a"), dinner], *WINDOW)
-
-        assert len(groups) == 2
-
-    def test_items_from_different_devices_stay_separate_meals(self, nutrition: GoogleHealthApiNutrition) -> None:
-        watch = _point("b", data_source={"platform": "ANDROID", "device": {"displayName": "Pixel Watch"}})
-
-        groups = nutrition._group_entries([_point("a"), watch], *WINDOW)
-
-        assert {g.device_model for g in groups} == {"Pixel Fold", "Pixel Watch"}
-
-    def test_meal_end_is_the_latest_item_end(self, nutrition: GoogleHealthApiNutrition) -> None:
-        longer = _point("b", interval=_interval(START, minutes=45))
-
-        groups = nutrition._group_entries([_point("a"), longer], *WINDOW)
-
-        assert groups[0].end == END + timedelta(minutes=15)
-
-    def test_external_id_and_offset_come_from_a_stable_item_regardless_of_order(
-        self, nutrition: GoogleHealthApiNutrition
-    ) -> None:
-        a, b = _point("a"), _point("b")
-
-        forward = nutrition._group_entries([a, b], *WINDOW)[0]
-        backward = nutrition._group_entries([b, a], *WINDOW)[0]
-
-        assert forward.external_id == backward.external_id == a["name"]
-        assert forward.zone_offset == "+02:00"
-
-    def test_skips_entries_outside_the_window(self, nutrition: GoogleHealthApiNutrition) -> None:
+    def test_skips_a_point_outside_the_window(self, nutrition: GoogleHealthApiNutrition) -> None:
         payload = _point(interval=_interval(START - timedelta(days=1)))
 
-        assert nutrition._group_entries([payload], *WINDOW) == []
+        assert nutrition._parse_point(payload, *WINDOW) is None
+
+    def test_skips_a_point_with_a_malformed_nutrition_log(self, nutrition: GoogleHealthApiNutrition) -> None:
+        payload = _point()
+        payload["nutritionLog"] = "not-a-dict"
+
+        assert nutrition._parse_point(payload, *WINDOW) is None
 
     def test_title_is_capped_to_the_column_length(self, nutrition: GoogleHealthApiNutrition) -> None:
         """A name over MealDetails.title's 255 chars must not fail the meal on every sync."""
         payload = _point(foodDisplayName="x" * 300)
 
-        assert len(nutrition._group_entries([payload], *WINDOW)[0].title) == 255
+        meal = nutrition._parse_point(payload, *WINDOW)
 
-    def test_no_titles_yields_none_not_empty_string(self, nutrition: GoogleHealthApiNutrition) -> None:
+        assert meal is not None
+        assert len(meal.title) == 255
+
+    def test_no_title_yields_none_not_empty_string(self, nutrition: GoogleHealthApiNutrition) -> None:
         payload = _point()
         del payload["nutritionLog"]["foodDisplayName"]
 
-        assert nutrition._group_entries([payload], *WINDOW)[0].title is None
+        meal = nutrition._parse_point(payload, *WINDOW)
+
+        assert meal is not None
+        assert meal.title is None
 
 
 class TestBuildSamples:
@@ -197,9 +188,10 @@ class TestBuildSamples:
         """Without device_model unrelated meals collide on the sample upsert key; without
         zone_offset a 23:30 local dinner lands in the next UTC day's totals."""
         meal_id = uuid4()
-        group = nutrition._group_entries([_point()], *WINDOW)[0]
+        meal = nutrition._parse_point(_point(), *WINDOW)
+        assert meal is not None
 
-        samples = nutrition._build_samples(USER_ID, meal_id, group)
+        samples = nutrition._build_samples(USER_ID, meal_id, meal)
 
         assert samples
         assert all(s.event_record_id == meal_id for s in samples)
@@ -233,7 +225,7 @@ class TestFetch:
 
 
 class TestLoadAndSave:
-    """End-to-end fetch -> group -> persist, with the DB/service layer mocked out."""
+    """End-to-end fetch -> parse -> persist, with the DB/service layer mocked out."""
 
     def _run(self, nutrition: GoogleHealthApiNutrition, points: list[dict], db: MagicMock | None = None) -> int:
         with (
@@ -279,8 +271,9 @@ class TestLoadAndSave:
 
         timeseries_service.crud.delete_stale_for_event_record.assert_not_called()
 
-    def test_three_items_of_one_meal_count_as_one_meal(self, nutrition: GoogleHealthApiNutrition) -> None:
-        assert self._run(nutrition, [_point("a"), _point("b"), _point("c")]) == 1
+    def test_three_points_count_as_three_separate_meals(self, nutrition: GoogleHealthApiNutrition) -> None:
+        """Even when they'd share start/device/mealType, each DataPoint is its own meal."""
+        assert self._run(nutrition, [_point("a"), _point("b"), _point("c")]) == 3
 
     def test_an_already_stored_meal_is_refreshed_but_not_counted(self, nutrition: GoogleHealthApiNutrition) -> None:
         """On re-sync the service hands back the existing row; its samples are still re-linked."""

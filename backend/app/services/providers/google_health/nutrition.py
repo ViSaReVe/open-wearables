@@ -6,11 +6,11 @@ written as a ``DataPointSeries`` sample linked back via ``event_record_id`` - th
 model the SDK/HealthKit meal-correlation import path already uses (see
 ``app/services/sdk/import_service.py``). Composed into GoogleHealth247Data.load_and_save_all.
 
-Google emits one DataPoint per *food item* (``foodDisplayName``), and food loggers give
-every item of a meal the same interval. Items sharing a source, start time, and meal type
-are folded into one meal here - titles joined, nutrients summed - because both
-``EventRecord`` (unique on data source + interval) and ``DataPointSeries`` (unique on data
-source + series + time) can hold only one row per such key.
+Google emits one DataPoint per *food item* (``foodDisplayName``), and assigns every
+DataPoint a stable, unique resource ``name`` (e.g.
+``users/123/dataTypes/nutrition-log/dataPoints/3608527872883869712``). Each DataPoint is
+stored as its own, independent meal, with that ``name`` used verbatim as ``external_id`` -
+there is no grouping of multiple DataPoints into one meal.
 
 Google wraps every nutrient value in a typed quantity object (``{"kcal": ...}`` for
 energy, ``{"grams": ...}`` for everything else - including sodium/potassium/cholesterol,
@@ -21,7 +21,7 @@ the full cross-provider comparison.
 """
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Any
@@ -49,9 +49,8 @@ from app.utils.sentry_helpers import log_and_capture_error
 
 _G_TO_MG = Decimal(1000)
 
-# MealDetails.title is str_255; a longer joined title would fail the whole meal on every sync.
+# MealDetails.title is str_255; a longer foodDisplayName would fail the whole meal on every sync.
 _TITLE_MAX_LEN = 255
-_TITLE_SEPARATOR = ", "
 
 # (payload field, quantity subfield, unified series) for the value object's top-level fields.
 NUTRITION_PRIMARY_FIELDS: tuple[tuple[str, str, SeriesType], ...] = (
@@ -96,22 +95,18 @@ def civil_start_filter(start_time: datetime, end_time: datetime) -> str:
 
 
 @dataclass
-class MealGroup:
-    """Every nutrition-log item that shares a data source, start time, and meal type, folded into one meal."""
+class _Meal:
+    """One nutrition-log DataPoint, ready to be stored as its own meal."""
 
+    external_id: str | None
     source_name: str
     device_model: str | None
     start: datetime
     end: datetime
     zone_offset: str | None
-    external_id: str | None
-    titles: list[str] = field(default_factory=list)
-    meal_type: str | None = None
-    nutrients: dict[SeriesType, Decimal] = field(default_factory=dict)
-
-    @property
-    def title(self) -> str | None:
-        return _TITLE_SEPARATOR.join(self.titles)[:_TITLE_MAX_LEN] or None
+    title: str | None
+    meal_type: str | None
+    nutrients: dict[SeriesType, Decimal]
 
 
 class GoogleHealthApiNutrition:
@@ -128,7 +123,7 @@ class GoogleHealthApiNutrition:
         self.logger = logging.getLogger(self.__class__.__name__)
 
     def load_and_save(self, db: DbSession, user_id: UUID, start_time: datetime, end_time: datetime) -> int:
-        """Fetch nutrition-log entries starting in the window and store them as meals.
+        """Fetch nutrition-log entries starting in the window and store each as its own meal.
 
         Never commits or rolls back the session: the 24/7 sync runs this inside its own
         ``begin_nested()`` savepoint, and a commit in here would close that context and fail
@@ -139,16 +134,19 @@ class GoogleHealthApiNutrition:
         have their end, title, type and nutrient values refreshed but are not counted.
         """
         count = 0
-        for group in self._group_entries(self._fetch(db, user_id, start_time, end_time), start_time, end_time):
+        for point in self._fetch(db, user_id, start_time, end_time):
+            meal = self._parse_point(point, start_time, end_time)
+            if meal is None:
+                continue
             try:
                 with db.begin_nested():
-                    inserted = self._save_meal(db, user_id, group)
+                    inserted = self._save_meal(db, user_id, meal)
             except Exception as e:
                 log_and_capture_error(
                     e,
                     self.logger,
                     f"Google nutrition sync failed for a meal: {e}",
-                    extra={"user_id": str(user_id), "provider": self.provider_name, "external_id": group.external_id},
+                    extra={"user_id": str(user_id), "provider": self.provider_name, "external_id": meal.external_id},
                 )
                 continue
             if inserted:
@@ -187,42 +185,28 @@ class GoogleHealthApiNutrition:
                 break
         return points
 
-    def _group_entries(self, points: list[dict[str, Any]], start_time: datetime, end_time: datetime) -> list[MealGroup]:
-        """Keep entries starting in the window and fold same-source, same-start, same-type items into one meal."""
-        groups: dict[tuple[str | None, datetime, str | None], MealGroup] = {}
-        # Sorted by resource name so which item lends the meal its external_id/offset is stable across syncs.
-        for point in sorted(points, key=lambda p: str(p.get("name") or "")):
-            nutrition = point.get("nutritionLog")
-            if not isinstance(nutrition, dict):
-                continue
-            interval = nutrition.get("interval") or {}
-            start, end = parse_interval(interval)
-            if start is None or end is None or not (start_time <= start < end_time):
-                continue
-            source_name, device_model = extract_source(point.get("dataSource"))
-            meal_type = (nutrition.get("mealType") or "").lower() or None
-
-            key = (device_model, start, meal_type)
-            group = groups.get(key)
-            if group is None:
-                group = MealGroup(
-                    source_name=source_name,
-                    device_model=device_model,
-                    start=start,
-                    end=end,
-                    zone_offset=zone_offset_from(interval.get("startUtcOffset")),
-                    external_id=point.get("name"),
-                    meal_type=meal_type,
-                )
-                groups[key] = group
-
-            group.end = max(group.end, end)
-            title = nutrition.get("foodDisplayName")
-            if title and title not in group.titles:
-                group.titles.append(title)
-            for series_type, value in self._nutrients(nutrition).items():
-                group.nutrients[series_type] = group.nutrients.get(series_type, Decimal(0)) + value
-        return list(groups.values())
+    def _parse_point(self, point: dict[str, Any], start_time: datetime, end_time: datetime) -> "_Meal | None":
+        """Turn one nutrition-log DataPoint into a meal, or None if it's malformed or outside the window."""
+        nutrition = point.get("nutritionLog")
+        if not isinstance(nutrition, dict):
+            return None
+        interval = nutrition.get("interval") or {}
+        start, end = parse_interval(interval)
+        if start is None or end is None or not (start_time <= start < end_time):
+            return None
+        source_name, device_model = extract_source(point.get("dataSource"))
+        title = nutrition.get("foodDisplayName")
+        return _Meal(
+            external_id=point.get("name"),
+            source_name=source_name,
+            device_model=device_model,
+            start=start,
+            end=end,
+            zone_offset=zone_offset_from(interval.get("startUtcOffset")),
+            title=title[:_TITLE_MAX_LEN] if title else None,
+            meal_type=(nutrition.get("mealType") or "").lower() or None,
+            nutrients=self._nutrients(nutrition),
+        )
 
     @staticmethod
     def _nutrients(nutrition: dict[str, Any]) -> dict[SeriesType, Decimal]:
@@ -244,7 +228,7 @@ class GoogleHealthApiNutrition:
                 values[series_type] = value
         return values
 
-    def _save_meal(self, db: DbSession, user_id: UUID, group: MealGroup) -> bool:
+    def _save_meal(self, db: DbSession, user_id: UUID, meal: "_Meal") -> bool:
         """Write (or refresh) the meal record, its detail, and its nutrient samples.
 
         Only flushes - the caller's savepoint makes the three writes stand or fall together,
@@ -257,40 +241,40 @@ class GoogleHealthApiNutrition:
             category="meal",
             provider=ProviderName.GOOGLE_HEALTH.value,
             source=GOOGLE_HEALTH_API_SOURCE,
-            source_name=group.source_name,
-            device_model=group.device_model,
-            external_id=group.external_id,
-            start_datetime=group.start,
-            end_datetime=group.end,
-            duration_seconds=int((group.end - group.start).total_seconds()),
-            zone_offset=group.zone_offset,
+            source_name=meal.source_name,
+            device_model=meal.device_model,
+            external_id=meal.external_id,
+            start_datetime=meal.start,
+            end_datetime=meal.end,
+            duration_seconds=int((meal.end - meal.start).total_seconds()),
+            zone_offset=meal.zone_offset,
             user_id=user_id,
         )
-        detail = MealDetailCreate(record_id=record.id, title=group.title, meal_type=group.meal_type)
+        detail = MealDetailCreate(record_id=record.id, title=meal.title, meal_type=meal.meal_type)
         saved, inserted = event_record_service.create_or_update_meal(db, record, detail)
 
         if not inserted:
             # A nutrient the provider stopped reporting must not linger from the previous sync.
-            timeseries_service.crud.delete_stale_for_event_record(db, saved.id, group.nutrients.keys())
-        samples = self._build_samples(user_id, saved.id, group)
+            timeseries_service.crud.delete_stale_for_event_record(db, saved.id, meal.nutrients.keys())
+        samples = self._build_samples(user_id, saved.id, meal)
         if samples:
             timeseries_service.bulk_create_samples(db, samples)
         return inserted
 
-    def _build_samples(self, user_id: UUID, meal_id: UUID, group: MealGroup) -> list[TimeSeriesSampleCreate]:
+    def _build_samples(self, user_id: UUID, meal_id: UUID, meal: "_Meal") -> list[TimeSeriesSampleCreate]:
         return [
             TimeSeriesSampleCreate(
                 id=uuid4(),
                 user_id=user_id,
                 provider=self.provider_name,
                 source=GOOGLE_HEALTH_API_SOURCE,
-                device_model=group.device_model,
-                recorded_at=group.start,
-                zone_offset=group.zone_offset,
+                device_model=meal.device_model,
+                recorded_at=meal.start,
+                zone_offset=meal.zone_offset,
                 value=value,
                 series_type=series_type,
                 is_daily_total=daily_total_flag(series_type, is_daily=False),
                 event_record_id=meal_id,
             )
-            for series_type, value in group.nutrients.items()
+            for series_type, value in meal.nutrients.items()
         ]

@@ -28,14 +28,14 @@ DEVICE = {"platform": "ANDROID", "device": {"displayName": "Pixel Fold"}}
 API = "https://health.googleapis.com"
 
 
-def _point(name: str, start: datetime = START, nutrients: list[dict] | None = None) -> dict:
+def _point(name: str, start: datetime = START, nutrients: list[dict] | None = None, minutes: int = 30) -> dict:
     return {
         "name": f"users/me/dataTypes/nutrition-log/dataPoints/{name}",
         "dataSource": DEVICE,
         "nutritionLog": {
             "interval": {
                 "startTime": start.isoformat(),
-                "endTime": (start + timedelta(minutes=30)).isoformat(),
+                "endTime": (start + timedelta(minutes=minutes)).isoformat(),
                 "startUtcOffset": "7200s",
             },
             "mealType": "LUNCH",
@@ -158,6 +158,29 @@ class TestResync:
         assert count == 0  # refreshed, not inserted
         assert _series_of(db, meal_id) == {energy_id}
         assert len(_meals(db)) == 1
+
+    def test_a_new_point_at_the_same_start_time_creates_a_separate_meal(self, db: Session) -> None:
+        """A different DataPoint (different name) is never folded into an existing meal, even
+        when it shares the same start time, device and meal type - it must land as its own row
+        and leave the existing meal untouched. (A different duration keeps the two points off
+        the unrelated (data_source, start, end) uniqueness constraint that every EventRecord
+        category shares - not something this change touches.)"""
+        user = UserFactory()
+        _existing_source(user)
+        db.commit()
+
+        _sync_like_data_247(db, user.id, [_point("Chicken")])
+        existing = _meals(db)[0]
+
+        count, swallowed = _sync_like_data_247(db, user.id, [_point("Rice", minutes=45)])
+
+        assert swallowed == []
+        assert count == 1  # a brand-new meal, not a refresh of the existing one
+        meals = _meals(db)
+        assert len(meals) == 2
+        assert {m.meal_detail.title for m in meals} == {"Chicken", "Rice"}
+        db.expire_all()
+        assert db.get(EventRecord, existing.id).meal_detail.title == "Chicken"
 
 
 class TestWebhookPath:
