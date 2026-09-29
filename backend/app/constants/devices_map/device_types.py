@@ -143,6 +143,18 @@ def _match_keywords(value: str, rules: list[tuple[re.Pattern[str], DeviceType]])
     return None
 
 
+# Values providers send when the device is unknown; treated as no device model
+DEVICE_MODEL_PLACEHOLDERS = frozenset({"", "unknown"})
+
+
+def normalize_device_model(device_model: str | None) -> str | None:
+    """Strip whitespace and map placeholders (e.g. Garmin's "unknown" on edited activities) to None."""
+    if device_model is None:
+        return None
+    stripped = device_model.strip()
+    return None if stripped.lower() in DEVICE_MODEL_PLACEHOLDERS else stripped
+
+
 def infer_device_type_from_model(device_model: str | None) -> DeviceType:
     """Infer device type from a device model string (Apple productType codes, Samsung codes, keywords)."""
     if not device_model or device_model.strip().lower() == "unknown":

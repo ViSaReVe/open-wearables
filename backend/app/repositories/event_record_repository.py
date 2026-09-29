@@ -208,15 +208,18 @@ class EventRecordRepository(
         for provider, provider_creators in by_provider.items():
             unique_identities: set[DataSourceIdentity] = set()
             reported_types: dict[DataSourceIdentity, DeviceType] = {}
+            software_versions: dict[DataSourceIdentity, str] = {}
             user_connection_id = provider_creators[0].user_connection_id if provider_creators else None
             for c in provider_creators:
                 identity = (c.user_id, c.device_model, c.source)
                 unique_identities.add(identity)
                 if c.device_type:
                     reported_types.setdefault(identity, c.device_type)
+                if c.software_version:
+                    software_versions.setdefault(identity, c.software_version)
 
             batch_result = self.data_source_repo.batch_ensure_data_sources(
-                db_session, provider, user_connection_id, unique_identities, reported_types
+                db_session, provider, user_connection_id, unique_identities, reported_types, software_versions
             )
             identity_to_source_id.update(batch_result)
 

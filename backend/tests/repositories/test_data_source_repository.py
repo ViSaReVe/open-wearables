@@ -111,3 +111,19 @@ class TestDataSourceRepository:
         db.expire_all()
         ds = repo.get_by_identity(db, user.id, ProviderName.HEALTH_CONNECT, None, "com.fitbit.FitbitMobile")
         assert ds.device_type == DeviceType.BAND
+
+    def test_batch_resolves_stored_empty_model_and_stores_software_version(self, db: Session) -> None:
+        user = UserFactory()
+        repo = DataSourceRepository(DataSource)
+        stored = repo.ensure_data_source(
+            db, user_id=user.id, provider=ProviderName.STRAVA, device_model="", source="strava"
+        )
+        identity = (user.id, None, "strava")
+        new_identity = (user.id, "SM-L315F", "Galaxy Watch7")
+
+        result = repo.batch_ensure_data_sources(db, ProviderName.STRAVA, None, {identity})
+        repo.batch_ensure_data_sources(db, ProviderName.SAMSUNG, None, {new_identity}, None, {new_identity: "5.0.1"})
+
+        assert result[identity] == stored.id
+        created = repo.get_by_identity(db, user.id, ProviderName.SAMSUNG, "SM-L315F", "Galaxy Watch7")
+        assert created.software_version == "5.0.1"

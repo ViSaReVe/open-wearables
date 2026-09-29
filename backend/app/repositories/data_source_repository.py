@@ -120,6 +120,11 @@ class DataSourceRepository(
             return resolved.value
         return current
 
+    @staticmethod
+    def _identity_key(identity: tuple[UUID, str | None, str | None]) -> tuple[UUID, str, str]:
+        user_id, device_model, source = identity
+        return user_id, device_model or "", source or ""
+
     def batch_ensure_data_sources(
         self,
         db_session: DbSession,
@@ -127,6 +132,7 @@ class DataSourceRepository(
         user_connection_id: UUID | None,
         identities: set[tuple[UUID, str | None, str | None]],
         reported_types: dict[tuple[UUID, str | None, str | None], DeviceType] | None = None,
+        software_versions: dict[tuple[UUID, str | None, str | None], str] | None = None,
     ) -> dict[tuple[UUID, str | None, str | None], UUID]:
         if not identities:
             return {}
@@ -142,11 +148,19 @@ class DataSourceRepository(
         existing = db_session.query(self.model).filter(or_(*conditions)).all()
 
         reported_types = reported_types or {}
+        software_versions = software_versions or {}
+        # Keyed like the identity index (NULL == ""), so stored "" still resolves requests with None
+        requested = {self._identity_key(i): i for i in identities_list}
         result: dict[tuple[UUID, str | None, str | None], UUID] = {}
         upgraded = False
         for ds in existing:
-            identity = (ds.user_id, ds.device_model, ds.source)
+            identity = requested.get(self._identity_key((ds.user_id, ds.device_model, ds.source)))
+            if identity is None:
+                continue
             result[identity] = ds.id
+            if ds.software_version is None and (version := software_versions.get(identity)):
+                object.__setattr__(ds, "software_version", version)
+                upgraded = True
             device_type = self.next_device_type(
                 provider,
                 ds.device_type,
@@ -175,6 +189,7 @@ class DataSourceRepository(
                         "provider": provider,
                         "user_connection_id": user_connection_id,
                         "device_model": device_model,
+                        "software_version": software_versions.get((user_id, device_model, source)),
                         "source": source,
                         "device_type": device_type.value if device_type != DeviceType.UNKNOWN else None,
                     }
@@ -189,7 +204,8 @@ class DataSourceRepository(
 
             newly_inserted = db_session.query(self.model).filter(or_(*conditions)).all()
             for ds in newly_inserted:
-                result[(ds.user_id, ds.device_model, ds.source)] = ds.id
+                if identity := requested.get(self._identity_key((ds.user_id, ds.device_model, ds.source))):
+                    result[identity] = ds.id
 
         return result
 

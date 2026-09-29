@@ -256,6 +256,7 @@ class Polar247Data(Base247DataTemplate):
                 category="sleep",
                 type="sleep_session",
                 source_name="Polar",
+                source=ProviderName.POLAR,
                 duration_seconds=duration_seconds,
                 start_datetime=start_dt,
                 end_datetime=end_dt,
