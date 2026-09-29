@@ -21,7 +21,7 @@ from app.constants.series_types.sdk import (
 from app.constants.workout_types import get_unified_sdk_workout_type
 from app.database import DbSession
 from app.repositories.user_connection_repository import UserConnectionRepository
-from app.schemas.enums import SeriesType, daily_total_flag, get_series_type_id
+from app.schemas.enums import SeriesType, daily_total_flag
 from app.schemas.model_crud.activities import (
     EventRecordCreate,
     EventRecordDetailCreate,
@@ -383,17 +383,13 @@ class ImportService:
         event_record_id on a sample for some other purpose can't get its rows silently swept
         into meal reconciliation.
         """
-        meal_sample_type_ids: dict[UUID, set[int]] = {}
+        meal_sample_types: dict[UUID, set[SeriesType]] = {}
         for sample in samples:
             if sample.event_record_id is None or sample.event_record_id not in meal_ids:
                 continue
-            meal_sample_type_ids.setdefault(sample.event_record_id, set()).add(
-                get_series_type_id(sample.series_type)
-            )
-        for meal_id, type_ids in meal_sample_type_ids.items():
-            self.event_record_service.data_point_series_repo.delete_stale_for_event_record(
-                db_session, meal_id, type_ids
-            )
+            meal_sample_types.setdefault(sample.event_record_id, set()).add(sample.series_type)
+        for meal_id, types in meal_sample_types.items():
+            self.event_record_service.data_point_series_repo.delete_stale_for_event_record(db_session, meal_id, types)
 
     def _compute_aggregates(self, values: list[Decimal]) -> tuple[Decimal | None, Decimal | None, Decimal | None]:
         """Return (min, max, avg) for `values`, or `(None, None, None)` when empty."""

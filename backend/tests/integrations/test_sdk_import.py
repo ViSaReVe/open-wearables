@@ -1105,9 +1105,7 @@ class TestSDKImportMealCorrelation:
         assert samples_by_external_id["energy-1"].event_record_id == meal.id
         assert samples_by_external_id["hr-1"].event_record_id is None
 
-    def test_caffeine_with_meal_parent_id_links_to_the_meal(
-        self, db: Session, import_service: ImportService
-    ) -> None:
+    def test_caffeine_with_meal_parent_id_links_to_the_meal(self, db: Session, import_service: ImportService) -> None:
         """Regression test: CORRELATION_LINKABLE_SERIES_TYPES for the food correlation must
         cover every dietary_* series type (not just the handful shown in a meal summary
         response) - caffeine, sugar, vitamins, minerals, ... are all legitimate meal
