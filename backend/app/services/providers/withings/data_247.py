@@ -1,10 +1,11 @@
 """Withings 24/7 data: body measures (``getmeas``), daily activity (``getactivity``),
-and sleep (``getsummary`` for the night's totals, ``get`` for its hypnogram). Continuous
-metrics become ``DataPointSeries`` samples; sleep becomes an ``EventRecord`` +
-``EventRecordDetail``, mirroring Oura.
+intraday activity (``getintradayactivity``) and sleep (``getsummary`` for the night's
+totals, ``get`` for its hypnogram). Continuous metrics become ``DataPointSeries``
+samples; sleep becomes an ``EventRecord`` + ``EventRecordDetail``, mirroring Oura.
 """
 
 import logging
+from datetime import date as date_type
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any, NamedTuple, NoReturn
@@ -14,7 +15,7 @@ from pydantic import ValidationError
 
 from app.config import settings
 from app.constants.series_types.withings import SLEEP_STATE_STAGE_MAP
-from app.constants.withings_requests import ACTIVITY, MEASURES, SLEEP_SERIES, SLEEP_SUMMARY
+from app.constants.withings_requests import ACTIVITY, INTRADAY_ACTIVITY, MEASURES, SLEEP_SERIES, SLEEP_SUMMARY
 from app.database import DbSession
 from app.models import EventRecord
 from app.repositories import EventRecordRepository, UserConnectionRepository
@@ -27,6 +28,7 @@ from app.schemas.model_crud.activities import (
 )
 from app.schemas.providers.withings import (
     WithingsActivity,
+    WithingsIntradayActivity,
     WithingsMeasureGroup,
     WithingsSleepSummary,
 )
@@ -35,7 +37,12 @@ from app.services.event_record_service import event_record_service
 from app.services.providers.templates.base_247_data import Base247DataTemplate
 from app.services.providers.templates.base_oauth import BaseOAuthTemplate
 from app.services.providers.withings.coverage import ACTIVITY_FIELD_MAP, MEASURE_TYPE_MAP, MEASURE_UNIT_FACTOR
-from app.services.providers.withings.handlers.rpc_client import paginate, scale_measure, withings_request
+from app.services.providers.withings.handlers.rpc_client import (
+    paginate,
+    paginate_mapping,
+    scale_measure,
+    withings_request,
+)
 from app.services.providers.withings.handlers.timezone import local_day_start, zone_offset_at
 from app.services.timeseries_service import timeseries_service
 from app.utils.dates import parse_datetime_or_default
@@ -55,9 +62,31 @@ class _Night(NamedTuple):
 # Trailing window used when a caller supplies no bounds.
 _DEFAULT_SYNC_WINDOW = timedelta(days=30)
 
+# Withings answers getintradayactivity with at most the first 24 h after startdate,
+# so a longer window is walked a day at a time.
+_INTRADAY_MAX_WINDOW = timedelta(days=1)
+
+# Withings hardware is numbered up to 102; 1051 and above are third-party trackers
+# relayed through the account (Apple, Android, GoogleFit, Samsung, Huawei), whose
+# steps already reach us from the provider that recorded them.
+_RELAYED_MODEL_ID_FLOOR = 1000
+
 # Every mapped meastype is requested in one getmeas call. Derived from the
 # coverage map, so it lives here rather than with the request definitions.
 _REQUESTED_MEASTYPES = ",".join(str(code) for code in MEASURE_TYPE_MAP)
+
+
+def _zone_for(timezones: dict[date_type, str], moment: datetime) -> str | None:
+    """The zone reported for the slice's day, falling back to the most recent earlier day.
+
+    A slice near midnight UTC belongs to a local day the map may key differently, and a
+    day Withings reported no activity for has no row of its own.
+    """
+    day = moment.date()
+    if day in timezones:
+        return timezones[day]
+    earlier = [known for known in timezones if known < day]
+    return timezones[max(earlier)] if earlier else None
 
 
 class Withings247Data(Base247DataTemplate):
@@ -276,6 +305,154 @@ class Withings247Data(Base247DataTemplate):
             list_key=ACTIVITY.list_key,
         ).rows
         samples = self.normalize_activity(rows, user_id, user_connection_id)
+        if not samples:
+            return 0
+        counts = timeseries_service.bulk_create_samples(db, samples)
+        db.commit()
+        return counts
+
+    # ---------------------- Intraday activity (getintradayactivity) ----------------------
+
+    def _window_timezones(
+        self,
+        db: DbSession,
+        user_id: UUID,
+        start: datetime,
+        end: datetime,
+    ) -> dict[date_type, str]:
+        """Map each day in the window to the zone Withings reported for it.
+
+        One extra request per sync rather than per day, and it survives a window the user
+        travelled through, because Withings reports the zone per daily row.
+        """
+        start_ymd, end_ymd = self._ymd_window(start, end)
+        rows = paginate(
+            db=db,
+            user_id=user_id,
+            connection_repo=self.connection_repo,
+            oauth=self.oauth,
+            service_path=ACTIVITY.service_path,
+            action=ACTIVITY.action,
+            params={"startdateymd": start_ymd, "enddateymd": end_ymd},
+            list_key=ACTIVITY.list_key,
+        ).rows
+        timezones: dict[date_type, str] = {}
+        for row in rows:
+            try:
+                activity = WithingsActivity.model_validate(row)
+            except ValidationError:
+                continue
+            if activity.timezone:
+                timezones[activity.date] = activity.timezone
+        return timezones
+
+    def normalize_intraday_activity(
+        self,
+        series: dict[str, Any],
+        user_id: UUID,
+        user_connection_id: UUID | None = None,
+        timezones: dict[date_type, str] | None = None,
+    ) -> list[TimeSeriesSampleCreate]:
+        """Turn the epoch-keyed slices into samples carrying the same measures as the daily rows.
+
+        A slice is keyed by an absolute epoch, but an hour of the day is a local one, so
+        each sample takes the offset Withings reported for that day; ``timezones`` supplies
+        it, because the intraday response itself carries no zone.
+        """
+        samples: list[TimeSeriesSampleCreate] = []
+        for epoch, row in series.items():
+            try:
+                recorded_at = datetime.fromtimestamp(int(epoch), tz=timezone.utc)
+            except (TypeError, ValueError):
+                log_structured(
+                    logger,
+                    "warning",
+                    "Skipping Withings intraday slice keyed by an unreadable epoch",
+                    provider=self.provider_name,
+                    action="intraday_epoch_invalid",
+                    user_id=str(user_id),
+                    epoch=str(epoch),
+                )
+                continue
+            # Tolerate a malformed slice without dropping the rest of the day.
+            try:
+                activity_slice = WithingsIntradayActivity.model_validate(row)
+            except ValidationError as e:
+                log_structured(
+                    logger,
+                    "warning",
+                    "Skipping unparseable Withings intraday slice",
+                    provider=self.provider_name,
+                    action="intraday_slice_validation_failed",
+                    user_id=str(user_id),
+                    error=str(e),
+                )
+                continue
+            if activity_slice.model_id is not None and activity_slice.model_id >= _RELAYED_MODEL_ID_FLOOR:
+                continue
+            zone_name = _zone_for(timezones or {}, recorded_at)
+            zone_offset = (
+                zone_offset_at(
+                    zone_name,
+                    recorded_at,
+                    logger,
+                    action="intraday_timezone_invalid",
+                    user_id=str(user_id),
+                )
+                if zone_name
+                else None
+            )
+            for field, series_type in ACTIVITY_FIELD_MAP.items():
+                value = getattr(activity_slice, field)
+                if value is None:
+                    continue
+                samples.append(
+                    TimeSeriesSampleCreate(
+                        id=uuid4(),
+                        user_id=user_id,
+                        source=self.provider_name,
+                        provider=self.provider_name,
+                        user_connection_id=user_connection_id,
+                        external_id=f"intraday:{epoch}:{series_type.value}",
+                        recorded_at=recorded_at,
+                        zone_offset=zone_offset,
+                        value=Decimal(str(value)),
+                        series_type=series_type,
+                        is_daily_total=daily_total_flag(series_type, is_daily=False),
+                    )
+                )
+        return samples
+
+    def save_intraday_activity(
+        self,
+        db: DbSession,
+        user_id: UUID,
+        start: datetime,
+        end: datetime,
+    ) -> int:
+        """Store the slices the daily totals are built from, one request per day."""
+        user_connection_id = self._active_connection_id(db, user_id)
+        timezones = self._window_timezones(db, user_id, start, end)
+        samples: list[TimeSeriesSampleCreate] = []
+        window_start = start
+        while window_start < end:
+            window_end = min(window_start + _INTRADAY_MAX_WINDOW, end)
+            series = paginate_mapping(
+                db=db,
+                user_id=user_id,
+                connection_repo=self.connection_repo,
+                oauth=self.oauth,
+                service_path=INTRADAY_ACTIVITY.service_path,
+                action=INTRADAY_ACTIVITY.action,
+                params={
+                    "startdate": int(window_start.timestamp()),
+                    "enddate": int(window_end.timestamp()),
+                    "data_fields": ",".join(INTRADAY_ACTIVITY.data_fields),
+                },
+                map_key=INTRADAY_ACTIVITY.list_key,
+            )
+            samples.extend(self.normalize_intraday_activity(series, user_id, user_connection_id, timezones))
+            window_start = window_end
         if not samples:
             return 0
         counts = timeseries_service.bulk_create_samples(db, samples)
@@ -606,6 +783,7 @@ class Withings247Data(Base247DataTemplate):
         for name, fn in (
             ("measures", self.save_measures),
             ("activity", self.save_activity),
+            ("intraday_activity", self.save_intraday_activity),
             ("sleep", self.save_sleep),
         ):
             try:

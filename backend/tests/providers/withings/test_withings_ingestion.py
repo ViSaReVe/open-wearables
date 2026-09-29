@@ -1,6 +1,6 @@
 """Withings payload normalization for measures, activity, sleep and workouts."""
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
@@ -104,6 +104,68 @@ def test_externally_sourced_activity_is_dropped() -> None:
     rows = [{"date": "2026-03-01", "brand": 18, "steps": 8000}]
 
     assert _data_247().normalize_activity(rows, uuid4()) == []
+
+
+# ---------------------------- intraday activity ----------------------------
+
+INTRADAY_SLICE = {"model_id": 55, "steps": 120, "distance": 96.5, "calories": 7.5}
+
+
+def test_intraday_slice_is_keyed_by_epoch_and_is_not_a_daily_total() -> None:
+    samples = _data_247().normalize_intraday_activity({"1772346600": INTRADAY_SLICE}, uuid4())
+
+    by_type = {sample.series_type: sample for sample in samples}
+    assert by_type[SeriesType.steps].value == Decimal("120")
+    assert by_type[SeriesType.steps].recorded_at == datetime(2026, 3, 1, 6, 30, tzinfo=timezone.utc)
+    # The daily total covering this slice is stored too; flagging both the same way
+    # would let the aggregation add a day to its own parts.
+    assert by_type[SeriesType.steps].is_daily_total is False
+
+
+def test_intraday_slice_from_a_relayed_tracker_is_dropped() -> None:
+    # 1058 is an Apple Watch relayed through the Withings account; those steps
+    # already reach us from the provider that recorded them.
+    series = {"1772346600": {**INTRADAY_SLICE, "model_id": 1058}}
+
+    assert _data_247().normalize_intraday_activity(series, uuid4()) == []
+
+
+def test_intraday_slice_with_an_unreadable_epoch_is_skipped() -> None:
+    series = {"not-an-epoch": INTRADAY_SLICE, "1772346600": INTRADAY_SLICE}
+
+    samples = _data_247().normalize_intraday_activity(series, uuid4())
+
+    assert {sample.recorded_at for sample in samples} == {datetime(2026, 3, 1, 6, 30, tzinfo=timezone.utc)}
+
+
+def test_intraday_slice_takes_the_zone_reported_for_its_day() -> None:
+    # An hour of the day is a local one, and the intraday response carries no zone.
+    timezones = {date(2026, 3, 1): "Europe/Warsaw"}
+
+    samples = _data_247().normalize_intraday_activity({"1772346600": INTRADAY_SLICE}, uuid4(), None, timezones)
+
+    assert {sample.zone_offset for sample in samples} == {"+01:00"}
+
+
+@patch("app.services.providers.withings.data_247.paginate")
+@patch("app.services.providers.withings.data_247.paginate_mapping")
+def test_intraday_window_is_requested_one_day_at_a_time(mock_intraday: MagicMock, mock_daily: MagicMock) -> None:
+    # Withings returns at most the first 24 h after startdate, so a single call
+    # for a longer window would silently drop every day but the first.
+    mock_intraday.return_value = {}
+    mock_daily.return_value = MagicMock(rows=[])
+    data_247 = _data_247()
+    data_247._active_connection_id = MagicMock(return_value=None)
+
+    data_247.save_intraday_activity(
+        MagicMock(),
+        uuid4(),
+        datetime(2026, 3, 1, tzinfo=timezone.utc),
+        datetime(2026, 3, 4, tzinfo=timezone.utc),
+    )
+
+    starts = [call.kwargs["params"]["startdate"] for call in mock_intraday.call_args_list]
+    assert starts == [int(datetime(2026, 3, day, tzinfo=timezone.utc).timestamp()) for day in (1, 2, 3)]
 
 
 # ---------------------------- workouts ----------------------------
