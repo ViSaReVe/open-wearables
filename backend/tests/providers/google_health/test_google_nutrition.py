@@ -115,9 +115,7 @@ class TestNutrients:
 class TestParsePoint:
     """Every nutrition-log DataPoint becomes its own, independent meal - no folding across points."""
 
-    def test_a_point_becomes_a_meal_with_its_own_name_as_external_id(
-        self, nutrition: GoogleHealthApiNutrition
-    ) -> None:
+    def test_a_point_becomes_a_meal_with_its_own_name_as_external_id(self, nutrition: GoogleHealthApiNutrition) -> None:
         point = _point("a", foodDisplayName="Chicken", mealType="LUNCH")
 
         meal = nutrition._parse_point(point, *WINDOW)
