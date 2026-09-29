@@ -1523,8 +1523,9 @@ class Garmin247Data(Base247DataTemplate):
         recorded_at = self._from_epoch_seconds(start_ts)
         zone_offset = offset_to_iso(raw_skin_temp.get("startTimeOffsetInSeconds"))
 
-        skin_temp = raw_skin_temp.get("skinTemperature")
-        if skin_temp is not None:
+        # Garmin reports the night as a deviation from the user's baseline, not a reading.
+        deviation = raw_skin_temp.get("avgDeviationCelsius")
+        if deviation is not None:
             samples.append(
                 TimeSeriesSampleCreate(
                     id=uuid4(),
@@ -1532,8 +1533,8 @@ class Garmin247Data(Base247DataTemplate):
                     source=self.provider_name,
                     recorded_at=recorded_at,
                     zone_offset=zone_offset,
-                    value=Decimal(str(skin_temp)),
-                    series_type=SeriesType.skin_temperature,
+                    value=Decimal(str(deviation)),
+                    series_type=SeriesType.skin_temperature_deviation,
                     external_id=summary_id,
                 )
             )
