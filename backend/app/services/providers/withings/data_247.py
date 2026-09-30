@@ -89,6 +89,19 @@ def _zone_for(timezones: dict[date_type, str], moment: datetime) -> str | None:
     return timezones[max(earlier)] if earlier else None
 
 
+def _daily_total_instants(timezones: dict[date_type, str]) -> set[datetime]:
+    """The instants ``save_activity`` stores each day's totals at.
+
+    A series row is keyed by its instant alone, so a slice landing on one would upsert the
+    day's total away. The two are written in separate batches, so nothing else catches it.
+    """
+    instants: set[datetime] = set()
+    for day, zone_name in timezones.items():
+        day_start, _ = local_day_start(day, zone_name, logger, action="intraday_day_start_invalid")
+        instants.add(day_start)
+    return instants
+
+
 class Withings247Data(Base247DataTemplate):
     """Withings continuous-data handler."""
 
@@ -360,6 +373,7 @@ class Withings247Data(Base247DataTemplate):
         it, because the intraday response itself carries no zone.
         """
         samples: list[TimeSeriesSampleCreate] = []
+        reserved = _daily_total_instants(timezones or {})
         for epoch, row in series.items():
             try:
                 recorded_at = datetime.fromtimestamp(int(epoch), tz=timezone.utc)
@@ -389,6 +403,8 @@ class Withings247Data(Base247DataTemplate):
                 )
                 continue
             if activity_slice.model_id is not None and activity_slice.model_id >= _RELAYED_MODEL_ID_FLOOR:
+                continue
+            if recorded_at in reserved:
                 continue
             zone_name = _zone_for(timezones or {}, recorded_at)
             zone_offset = (
@@ -430,13 +446,20 @@ class Withings247Data(Base247DataTemplate):
         start: datetime,
         end: datetime,
     ) -> int:
-        """Store the slices the daily totals are built from, one request per day."""
+        """Store the slices the daily totals are built from, asking only for days that have any.
+
+        The action returns at most 24 h per call, so a window costs one request per day. Asking
+        blindly would spend the account's per-minute quota on empty days and leave none for the
+        domains that run after this one, so the daily rows decide which days are worth asking
+        for — Withings reports one per day it recorded, and they carry the zone as well.
+        """
         user_connection_id = self._active_connection_id(db, user_id)
         timezones = self._window_timezones(db, user_id, start, end)
+        if not timezones:
+            return 0
         samples: list[TimeSeriesSampleCreate] = []
-        window_start = start
-        while window_start < end:
-            window_end = min(window_start + _INTRADAY_MAX_WINDOW, end)
+        for day, zone_name in sorted(timezones.items()):
+            day_start, _ = local_day_start(day, zone_name, logger, action="intraday_day_start_invalid")
             series = paginate_mapping(
                 db=db,
                 user_id=user_id,
@@ -445,14 +468,13 @@ class Withings247Data(Base247DataTemplate):
                 service_path=INTRADAY_ACTIVITY.service_path,
                 action=INTRADAY_ACTIVITY.action,
                 params={
-                    "startdate": int(window_start.timestamp()),
-                    "enddate": int(window_end.timestamp()),
+                    "startdate": int(day_start.timestamp()),
+                    "enddate": int((day_start + _INTRADAY_MAX_WINDOW).timestamp()),
                     "data_fields": ",".join(INTRADAY_ACTIVITY.data_fields),
                 },
                 map_key=INTRADAY_ACTIVITY.list_key,
             )
             samples.extend(self.normalize_intraday_activity(series, user_id, user_connection_id, timezones))
-            window_start = window_end
         if not samples:
             return 0
         counts = timeseries_service.bulk_create_samples(db, samples)
@@ -783,8 +805,10 @@ class Withings247Data(Base247DataTemplate):
         for name, fn in (
             ("measures", self.save_measures),
             ("activity", self.save_activity),
-            ("intraday_activity", self.save_intraday_activity),
             ("sleep", self.save_sleep),
+            # Last: it spends one request per active day, far more than the others, and a
+            # throttle it triggers must not be what stops them from running at all.
+            ("intraday_activity", self.save_intraday_activity),
         ):
             try:
                 results[name] = fn(db, user_id, start_time, end_time)

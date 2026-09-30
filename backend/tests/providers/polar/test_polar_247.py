@@ -207,6 +207,28 @@ class TestPolar247DailyActivityNormalization:
             ("2024-01-15T07:20:00", 0),
         ]
 
+    def test_step_sample_does_not_overwrite_the_daily_total(
+        self, data_247: Polar247Data, sample_activity: dict
+    ) -> None:
+        # Polar's first sample always repeats start_time, where the day's total is stored.
+        # A series row is keyed by its instant alone, so emitting both replaces the total.
+        sample_activity["samples"] = {
+            "steps": {
+                "interval_ms": 60_000,
+                "total_steps": 9500,
+                "samples": [
+                    {"steps": 0, "timestamp": "2024-01-15T00:00:00"},
+                    {"steps": 120, "timestamp": "2024-01-15T07:10"},
+                ],
+            }
+        }
+
+        samples = data_247.normalize_daily_activity([sample_activity], uuid4())
+
+        step_samples = [s for s in samples if s.series_type == SeriesType.steps]
+        assert [s.value for s in step_samples if s.recorded_at == datetime(2024, 1, 15)] == [9500]
+        assert [int(s.value) for s in step_samples if not s.is_daily_total] == [120]
+
     def test_unreadable_step_sample_timestamp_skipped(self, data_247: Polar247Data, sample_activity: dict) -> None:
         sample_activity["samples"] = {
             "steps": {

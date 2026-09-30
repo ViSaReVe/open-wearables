@@ -147,13 +147,32 @@ def test_intraday_slice_takes_the_zone_reported_for_its_day() -> None:
     assert {sample.zone_offset for sample in samples} == {"+01:00"}
 
 
+def test_intraday_slice_on_the_local_day_start_is_dropped() -> None:
+    # save_activity stores the day's totals at local midnight, and the two are written in
+    # separate batches, so a slice on that instant would upsert the totals away.
+    timezones = {date(2026, 3, 1): "Europe/Warsaw"}
+    local_midnight = str(int(datetime(2026, 2, 28, 23, tzinfo=timezone.utc).timestamp()))
+
+    samples = _data_247().normalize_intraday_activity({local_midnight: INTRADAY_SLICE}, uuid4(), None, timezones)
+
+    assert samples == []
+
+
 @patch("app.services.providers.withings.data_247.paginate")
 @patch("app.services.providers.withings.data_247.paginate_mapping")
-def test_intraday_window_is_requested_one_day_at_a_time(mock_intraday: MagicMock, mock_daily: MagicMock) -> None:
-    # Withings returns at most the first 24 h after startdate, so a single call
-    # for a longer window would silently drop every day but the first.
+def test_intraday_is_requested_only_for_days_the_daily_rows_report(
+    mock_intraday: MagicMock, mock_daily: MagicMock
+) -> None:
+    # The action returns at most 24 h per call, so a window costs one request per day.
+    # Asking for days Withings never reported would spend the per-minute quota on nothing
+    # and leave none for the domains that run after this one.
     mock_intraday.return_value = {}
-    mock_daily.return_value = MagicMock(rows=[])
+    mock_daily.return_value = MagicMock(
+        rows=[
+            {"date": "2026-03-01", "timezone": "Europe/Warsaw", "brand": 1, "steps": 1},
+            {"date": "2026-03-03", "timezone": "Europe/Warsaw", "brand": 1, "steps": 2},
+        ]
+    )
     data_247 = _data_247()
     data_247._active_connection_id = MagicMock(return_value=None)
 
@@ -161,11 +180,35 @@ def test_intraday_window_is_requested_one_day_at_a_time(mock_intraday: MagicMock
         MagicMock(),
         uuid4(),
         datetime(2026, 3, 1, tzinfo=timezone.utc),
-        datetime(2026, 3, 4, tzinfo=timezone.utc),
+        datetime(2026, 3, 5, tzinfo=timezone.utc),
     )
 
+    # Local midnight in Warsaw, not the window's own edges: the day asked for is the user's.
     starts = [call.kwargs["params"]["startdate"] for call in mock_intraday.call_args_list]
-    assert starts == [int(datetime(2026, 3, day, tzinfo=timezone.utc).timestamp()) for day in (1, 2, 3)]
+    assert starts == [
+        int(datetime(2026, 2, 28, 23, tzinfo=timezone.utc).timestamp()),
+        int(datetime(2026, 3, 2, 23, tzinfo=timezone.utc).timestamp()),
+    ]
+
+
+@patch("app.services.providers.withings.data_247.paginate")
+@patch("app.services.providers.withings.data_247.paginate_mapping")
+def test_intraday_asks_for_nothing_when_no_day_reported_activity(
+    mock_intraday: MagicMock, mock_daily: MagicMock
+) -> None:
+    mock_daily.return_value = MagicMock(rows=[])
+    data_247 = _data_247()
+    data_247._active_connection_id = MagicMock(return_value=None)
+
+    saved = data_247.save_intraday_activity(
+        MagicMock(),
+        uuid4(),
+        datetime(2026, 3, 1, tzinfo=timezone.utc),
+        datetime(2026, 4, 1, tzinfo=timezone.utc),
+    )
+
+    assert saved == 0
+    assert mock_intraday.call_args_list == []
 
 
 # ---------------------------- workouts ----------------------------

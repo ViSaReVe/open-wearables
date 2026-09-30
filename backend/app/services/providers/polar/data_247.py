@@ -361,15 +361,24 @@ class Polar247Data(Base247DataTemplate):
                         is_daily_total=daily_total_flag(series_type, is_daily=True),
                     )
                 )
-            samples.extend(self._build_step_samples(parsed, user_id))
+            samples.extend(self._build_step_samples(parsed, user_id, recorded_at))
         return samples
 
-    def _build_step_samples(self, parsed: DailyActivityJSON, user_id: UUID) -> list[TimeSeriesSampleCreate]:
+    def _build_step_samples(
+        self,
+        parsed: DailyActivityJSON,
+        user_id: UUID,
+        daily_total_at: datetime,
+    ) -> list[TimeSeriesSampleCreate]:
         """Emit the intraday step samples the daily row already carries.
 
         ``/v3/users/activities`` is requested with ``steps=true``, so every row arrives with
         them; only the day's total was read until now. They answer which hours a user moved
         in, which the total cannot.
+
+        Polar's first sample always repeats ``start_time``, which is where the day's total is
+        stored. A series row is keyed by its instant alone, so emitting both would upsert the
+        total away and leave the day reporting that first minute instead.
         """
         if not parsed.samples or not parsed.samples.steps:
             return []
@@ -379,6 +388,8 @@ class Polar247Data(Base247DataTemplate):
                 recorded_at = datetime.fromisoformat(sample.timestamp)
             except ValueError:
                 self.logger.warning("Skipping Polar step sample with an unreadable timestamp")
+                continue
+            if recorded_at == daily_total_at:
                 continue
             samples.append(
                 TimeSeriesSampleCreate(
