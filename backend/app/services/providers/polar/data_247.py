@@ -20,7 +20,7 @@ from app.constants.series_types.polar import (
 )
 from app.database import DbSession
 from app.repositories.user_connection_repository import UserConnectionRepository
-from app.schemas.enums import HealthScoreCategory, ProviderName, SeriesType
+from app.schemas.enums import HealthScoreCategory, ProviderName, SeriesType, daily_total_flag
 from app.schemas.model_crud.activities import (
     EventRecordCreate,
     EventRecordDetailCreate,
@@ -358,9 +358,40 @@ class Polar247Data(Base247DataTemplate):
                         recorded_at=recorded_at,
                         value=Decimal(str(value)),
                         series_type=series_type,
-                        is_daily_total=True,
+                        is_daily_total=daily_total_flag(series_type, is_daily=True),
                     )
                 )
+            samples.extend(self._build_step_samples(parsed, user_id))
+        return samples
+
+    def _build_step_samples(self, parsed: DailyActivityJSON, user_id: UUID) -> list[TimeSeriesSampleCreate]:
+        """Emit the intraday step samples the daily row already carries.
+
+        ``/v3/users/activities`` is requested with ``steps=true``, so every row arrives with
+        them; only the day's total was read until now. They answer which hours a user moved
+        in, which the total cannot.
+        """
+        if not parsed.samples or not parsed.samples.steps:
+            return []
+        samples: list[TimeSeriesSampleCreate] = []
+        for sample in parsed.samples.steps.samples:
+            try:
+                recorded_at = datetime.fromisoformat(sample.timestamp)
+            except ValueError:
+                self.logger.warning("Skipping Polar step sample with an unreadable timestamp")
+                continue
+            samples.append(
+                TimeSeriesSampleCreate(
+                    id=uuid4(),
+                    user_id=user_id,
+                    provider=ProviderName.POLAR,
+                    source=ProviderName.POLAR,
+                    recorded_at=recorded_at,
+                    value=Decimal(sample.steps),
+                    series_type=SeriesType.steps,
+                    is_daily_total=daily_total_flag(SeriesType.steps, is_daily=False),
+                )
+            )
         return samples
 
     # -------------------------------------------------------------------------
