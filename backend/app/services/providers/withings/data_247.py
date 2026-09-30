@@ -354,6 +354,9 @@ class Withings247Data(Base247DataTemplate):
                 activity = WithingsActivity.model_validate(row)
             except ValidationError:
                 continue
+            # Only the rows save_activity keeps decide where the day's total sits.
+            if activity.brand == 18:
+                continue
             timezones[activity.date] = activity.timezone
         return timezones
 

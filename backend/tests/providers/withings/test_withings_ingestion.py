@@ -230,6 +230,29 @@ def test_intraday_asks_for_a_day_without_a_zone(mock_intraday: MagicMock, mock_d
     assert starts == [int(datetime(2026, 3, 1, tzinfo=timezone.utc).timestamp())]
 
 
+@patch("app.services.providers.withings.data_247.paginate")
+@patch("app.services.providers.withings.data_247.paginate_mapping")
+def test_intraday_zone_ignores_externally_sourced_rows(mock_intraday: MagicMock, mock_daily: MagicMock) -> None:
+    # The day's total comes from the Withings row only, so an echo row in another zone
+    # must not move the midnight the intraday request and its guard are anchored to.
+    mock_intraday.return_value = {}
+    mock_daily.return_value = MagicMock(
+        rows=[
+            {"date": "2026-03-01", "timezone": "Europe/Warsaw", "brand": 1, "steps": 1},
+            {"date": "2026-03-01", "timezone": "America/New_York", "brand": 18, "steps": 1},
+        ]
+    )
+    data_247 = _data_247()
+    data_247._active_connection_id = MagicMock(return_value=None)
+
+    data_247.save_intraday_activity(
+        MagicMock(), uuid4(), datetime(2026, 3, 1, tzinfo=timezone.utc), datetime(2026, 3, 2, tzinfo=timezone.utc)
+    )
+
+    starts = [call.kwargs["params"]["startdate"] for call in mock_intraday.call_args_list]
+    assert starts == [int(datetime(2026, 2, 28, 23, tzinfo=timezone.utc).timestamp())]
+
+
 TWO_DAYS = [
     {"date": "2026-03-01", "timezone": "Europe/Warsaw", "brand": 1, "steps": 1},
     {"date": "2026-03-02", "timezone": "Europe/Warsaw", "brand": 1, "steps": 1},
