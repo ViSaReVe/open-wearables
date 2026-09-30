@@ -27,7 +27,7 @@ from app.repositories import (
     EventRecordRepository,
     HealthScoreRepository,
 )
-from app.schemas.enums import HealthScoreCategory, SeriesType, get_series_type_id
+from app.schemas.enums import HealthScoreCategory, SeriesType, get_series_type_id, get_series_type_unit
 from app.schemas.model_crud.activities import (
     EventRecordCreate,
     EventRecordDetailCreate,
@@ -44,6 +44,7 @@ from app.schemas.responses.activity import (
     Macros,
     Meal,
     MenstrualCycleRecord,
+    NutrientValue,
     SleepSession,
     SleepStagesSummary,
     Workout,
@@ -65,17 +66,10 @@ from app.utils.conversion import as_dict_list, as_float, as_model, minutes_to_se
 from app.utils.exceptions import handle_exceptions
 from app.utils.pagination import encode_cursor
 
-# Nutrient series correlated to a meal EventRecord that the /events/meals response summarizes.
-_MEAL_SERIES_TYPES: frozenset[SeriesType] = frozenset(
-    {
-        SeriesType.dietary_energy_consumed,
-        SeriesType.dietary_protein,
-        SeriesType.dietary_carbohydrates,
-        SeriesType.dietary_fat_total,
-        SeriesType.dietary_fiber,
-        SeriesType.hydration,
-    }
-)
+# Nutrient series correlated to a meal EventRecord that the /events/meals response returns.
+_MEAL_SERIES_TYPES: frozenset[SeriesType] = frozenset(t for t in SeriesType if t.value.startswith("dietary_")) | {
+    SeriesType.hydration
+}
 
 
 def pace_sec_per_km(distance_meters: float | None, seconds: int | None) -> float | None:
@@ -1142,6 +1136,10 @@ class EventRecordService(
                     calories_kcal=as_float(nutrients.get(SeriesType.dietary_energy_consumed)),
                     macros=macros if any(v is not None for v in macros.model_dump().values()) else None,
                     water_ml=as_float(nutrients.get(SeriesType.hydration)),
+                    nutrients={
+                        t.value: NutrientValue(value=float(v), unit=get_series_type_unit(t))
+                        for t, v in nutrients.items()
+                    },
                 )
             )
 

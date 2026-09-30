@@ -9,6 +9,7 @@ from .events import (
     Meal,
     Measurement,
     MenstrualCycleRecord,
+    NutrientValue,
     SleepSession,
     Workout,
 )
@@ -44,6 +45,7 @@ __all__ = [
     "Workout",
     "Meal",
     "Macros",
+    "NutrientValue",
     "Measurement",
     "MenstrualCycleRecord",
     "SleepSession",

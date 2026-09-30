@@ -546,6 +546,47 @@ class TestGetMealsNutrients:
 
         assert len(response.data) == 1
         assert response.data[0].macros.protein_g == 31.0
+        assert response.data[0].nutrients["dietary_protein"].value == 31.0
+        assert response.data[0].nutrients["dietary_protein"].unit == "g"
+
+    def test_all_nutrients_are_returned_not_only_macros(self, db: Session) -> None:
+        data_source = DataSourceFactory()
+        record = EventRecordCreate(
+            id=uuid4(),
+            category="meal",
+            source_name="Google Health",
+            source=data_source.source,
+            user_id=data_source.user_id,
+            data_source_id=data_source.id,
+            start_datetime=self.START,
+            end_datetime=self.START + timedelta(minutes=30),
+            duration_seconds=30 * 60,
+        )
+        event_record_service.create_or_update_meal(db, record, MealDetailCreate(record_id=record.id, title="Snack"))
+        db.commit()
+
+        expected = {
+            SeriesType.dietary_sugar: ("5", "g"),
+            SeriesType.dietary_sodium: ("120", "mg"),
+            SeriesType.dietary_vitamin_c: ("30", "mg"),
+            SeriesType.dietary_caffeine: ("80", "mg"),
+        }
+        for series_type, (value, _) in expected.items():
+            DataPointSeriesFactory(
+                data_source=data_source,
+                series_type=db.get(SeriesTypeDefinition, get_series_type_id(series_type)),
+                event_record_id=record.id,
+                recorded_at=self.START,
+                value=Decimal(value),
+            )
+        db.commit()
+
+        response = event_record_service.get_meals(db, data_source.user_id, EventRecordQueryParams())
+
+        nutrients = response.data[0].nutrients
+        assert {k: (v.value, v.unit) for k, v in nutrients.items()} == {
+            t.value: (float(v), u) for t, (v, u) in expected.items()
+        }
 
 
 class TestCreateOrMergeSleep:

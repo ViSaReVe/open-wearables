@@ -59,6 +59,11 @@ class Macros(BaseModel):
     fiber_g: float | None = None
 
 
+class NutrientValue(BaseModel):
+    value: float
+    unit: str
+
+
 class Meal(BaseModel):
     id: UUID
     timestamp: datetime
@@ -68,6 +73,11 @@ class Meal(BaseModel):
     calories_kcal: float | None = None
     macros: Macros | None = None
     water_ml: float | None = None
+    nutrients: dict[str, NutrientValue] = Field(
+        default_factory=dict,
+        description="All nutrient values recorded for the meal, keyed by series type (e.g. dietary_sugar)",
+        example={"dietary_sugar": {"value": 12.5, "unit": "g"}},
+    )
 
 
 class Measurement(BaseModel):
