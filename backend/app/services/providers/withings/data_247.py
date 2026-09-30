@@ -76,7 +76,7 @@ _RELAYED_MODEL_ID_FLOOR = 1000
 _REQUESTED_MEASTYPES = ",".join(str(code) for code in MEASURE_TYPE_MAP)
 
 
-def _zone_for(timezones: dict[date_type, str], moment: datetime) -> str | None:
+def _zone_for(timezones: dict[date_type, str | None], moment: datetime) -> str | None:
     """The zone reported for the slice's day, falling back to the most recent earlier day.
 
     A slice near midnight UTC belongs to a local day the map may key differently, and a
@@ -89,7 +89,7 @@ def _zone_for(timezones: dict[date_type, str], moment: datetime) -> str | None:
     return timezones[max(earlier)] if earlier else None
 
 
-def _daily_total_instants(timezones: dict[date_type, str]) -> set[datetime]:
+def _daily_total_instants(timezones: dict[date_type, str | None]) -> set[datetime]:
     """The instants ``save_activity`` stores each day's totals at.
 
     A series row is keyed by its instant alone, so a slice landing on one would upsert the
@@ -332,11 +332,10 @@ class Withings247Data(Base247DataTemplate):
         user_id: UUID,
         start: datetime,
         end: datetime,
-    ) -> dict[date_type, str]:
-        """Map each day in the window to the zone Withings reported for it.
+    ) -> dict[date_type, str | None]:
+        """Map each day with a daily row to the zone Withings reported for it, if any.
 
-        One extra request per sync rather than per day, and it survives a window the user
-        travelled through, because Withings reports the zone per daily row.
+        The keys decide which days get an intraday request, so a day without a zone stays in.
         """
         start_ymd, end_ymd = self._ymd_window(start, end)
         rows = paginate(
@@ -349,14 +348,13 @@ class Withings247Data(Base247DataTemplate):
             params={"startdateymd": start_ymd, "enddateymd": end_ymd},
             list_key=ACTIVITY.list_key,
         ).rows
-        timezones: dict[date_type, str] = {}
+        timezones: dict[date_type, str | None] = {}
         for row in rows:
             try:
                 activity = WithingsActivity.model_validate(row)
             except ValidationError:
                 continue
-            if activity.timezone:
-                timezones[activity.date] = activity.timezone
+            timezones[activity.date] = activity.timezone
         return timezones
 
     def normalize_intraday_activity(
@@ -364,7 +362,7 @@ class Withings247Data(Base247DataTemplate):
         series: dict[str, Any],
         user_id: UUID,
         user_connection_id: UUID | None = None,
-        timezones: dict[date_type, str] | None = None,
+        timezones: dict[date_type, str | None] | None = None,
     ) -> list[TimeSeriesSampleCreate]:
         """Turn the epoch-keyed slices into samples carrying the same measures as the daily rows.
 
@@ -446,12 +444,10 @@ class Withings247Data(Base247DataTemplate):
         start: datetime,
         end: datetime,
     ) -> int:
-        """Store the slices the daily totals are built from, asking only for days that have any.
+        """Store the intraday slices, one request per day that has a daily row.
 
-        The action returns at most 24 h per call, so a window costs one request per day. Asking
-        blindly would spend the account's per-minute quota on empty days and leave none for the
-        domains that run after this one, so the daily rows decide which days are worth asking
-        for — Withings reports one per day it recorded, and they carry the zone as well.
+        The action returns at most 24 h per call, and asking for days without data would spend
+        the per-minute quota the other domains need.
         """
         user_connection_id = self._active_connection_id(db, user_id)
         timezones = self._window_timezones(db, user_id, start, end)
@@ -460,20 +456,33 @@ class Withings247Data(Base247DataTemplate):
         samples: list[TimeSeriesSampleCreate] = []
         for day, zone_name in sorted(timezones.items()):
             day_start, _ = local_day_start(day, zone_name, logger, action="intraday_day_start_invalid")
-            series = paginate_mapping(
-                db=db,
-                user_id=user_id,
-                connection_repo=self.connection_repo,
-                oauth=self.oauth,
-                service_path=INTRADAY_ACTIVITY.service_path,
-                action=INTRADAY_ACTIVITY.action,
-                params={
-                    "startdate": int(day_start.timestamp()),
-                    "enddate": int((day_start + _INTRADAY_MAX_WINDOW).timestamp()),
-                    "data_fields": ",".join(INTRADAY_ACTIVITY.data_fields),
-                },
-                map_key=INTRADAY_ACTIVITY.list_key,
-            )
+            try:
+                series = paginate_mapping(
+                    db=db,
+                    user_id=user_id,
+                    connection_repo=self.connection_repo,
+                    oauth=self.oauth,
+                    service_path=INTRADAY_ACTIVITY.service_path,
+                    action=INTRADAY_ACTIVITY.action,
+                    params={
+                        "startdate": int(day_start.timestamp()),
+                        "enddate": int((day_start + _INTRADAY_MAX_WINDOW).timestamp()),
+                        "data_fields": ",".join(INTRADAY_ACTIVITY.data_fields),
+                    },
+                    map_key=INTRADAY_ACTIVITY.list_key,
+                )
+            except Exception as e:
+                if not samples:
+                    raise
+                log_structured(
+                    logger,
+                    "warning",
+                    f"Returning partial Withings intraday activity due to error: {e}",
+                    provider=self.provider_name,
+                    action="withings_api_partial_data",
+                    user_id=str(user_id),
+                )
+                break
             samples.extend(self.normalize_intraday_activity(series, user_id, user_connection_id, timezones))
         if not samples:
             return 0

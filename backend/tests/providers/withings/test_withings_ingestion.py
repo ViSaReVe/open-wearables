@@ -5,6 +5,8 @@ from decimal import Decimal
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
+import pytest
+
 from app.schemas.enums import SeriesType
 from app.schemas.enums.workout_types import WorkoutType
 from app.schemas.providers.withings import WithingsWorkout
@@ -209,6 +211,66 @@ def test_intraday_asks_for_nothing_when_no_day_reported_activity(
 
     assert saved == 0
     assert mock_intraday.call_args_list == []
+
+
+@patch("app.services.providers.withings.data_247.paginate")
+@patch("app.services.providers.withings.data_247.paginate_mapping")
+def test_intraday_asks_for_a_day_without_a_zone(mock_intraday: MagicMock, mock_daily: MagicMock) -> None:
+    # A missing zone costs the local offset, not the day: it is asked for from UTC midnight.
+    mock_intraday.return_value = {}
+    mock_daily.return_value = MagicMock(rows=[{"date": "2026-03-01", "brand": 1, "steps": 1}])
+    data_247 = _data_247()
+    data_247._active_connection_id = MagicMock(return_value=None)
+
+    data_247.save_intraday_activity(
+        MagicMock(), uuid4(), datetime(2026, 3, 1, tzinfo=timezone.utc), datetime(2026, 3, 2, tzinfo=timezone.utc)
+    )
+
+    starts = [call.kwargs["params"]["startdate"] for call in mock_intraday.call_args_list]
+    assert starts == [int(datetime(2026, 3, 1, tzinfo=timezone.utc).timestamp())]
+
+
+TWO_DAYS = [
+    {"date": "2026-03-01", "timezone": "Europe/Warsaw", "brand": 1, "steps": 1},
+    {"date": "2026-03-02", "timezone": "Europe/Warsaw", "brand": 1, "steps": 1},
+]
+
+
+@patch("app.services.providers.withings.data_247.timeseries_service")
+@patch("app.services.providers.withings.data_247.paginate")
+@patch("app.services.providers.withings.data_247.paginate_mapping")
+def test_intraday_keeps_the_days_fetched_before_a_failure(
+    mock_intraday: MagicMock, mock_daily: MagicMock, mock_timeseries: MagicMock
+) -> None:
+    mock_daily.return_value = MagicMock(rows=TWO_DAYS)
+    mock_intraday.side_effect = [{"1772346600": INTRADAY_SLICE}, RuntimeError("Too Many Requests")]
+    mock_timeseries.bulk_create_samples.return_value = 3
+    data_247 = _data_247()
+    data_247._active_connection_id = MagicMock(return_value=None)
+
+    saved = data_247.save_intraday_activity(
+        MagicMock(), uuid4(), datetime(2026, 3, 1, tzinfo=timezone.utc), datetime(2026, 3, 3, tzinfo=timezone.utc)
+    )
+
+    assert saved == 3
+    written = mock_timeseries.bulk_create_samples.call_args.args[1]
+    assert {sample.recorded_at for sample in written} == {datetime(2026, 3, 1, 6, 30, tzinfo=timezone.utc)}
+
+
+@patch("app.services.providers.withings.data_247.paginate")
+@patch("app.services.providers.withings.data_247.paginate_mapping")
+def test_intraday_failure_before_anything_is_fetched_propagates(
+    mock_intraday: MagicMock, mock_daily: MagicMock
+) -> None:
+    mock_daily.return_value = MagicMock(rows=TWO_DAYS)
+    mock_intraday.side_effect = RuntimeError("Too Many Requests")
+    data_247 = _data_247()
+    data_247._active_connection_id = MagicMock(return_value=None)
+
+    with pytest.raises(RuntimeError):
+        data_247.save_intraday_activity(
+            MagicMock(), uuid4(), datetime(2026, 3, 1, tzinfo=timezone.utc), datetime(2026, 3, 3, tzinfo=timezone.utc)
+        )
 
 
 # ---------------------------- workouts ----------------------------
