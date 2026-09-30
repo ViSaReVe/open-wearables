@@ -39,7 +39,7 @@ from sqlalchemy.schema import CreateTable
 from app.database import DbSession
 from app.models import DataPointSeries, DataPointSeriesArchive, DataSource, DeviceTypePriority, ProviderPriority
 from app.models.series_type_definition import SeriesTypeDefinition
-from app.repositories.data_source_repository import DataSourceRepository
+from app.repositories.data_source_repository import DataSourceIdentity, DataSourceRepository
 from app.repositories.repositories import (
     CrudRepository,
     source_filter_conditions,
@@ -74,7 +74,6 @@ from app.utils.exceptions import handle_exceptions
 from app.utils.pagination import decode_bucket_cursor, decode_cursor
 
 # Identity tuple: (user_id, device_model, source)
-DataSourceIdentity = tuple[UUID, str | None, str | None]
 
 
 class WriteCounts(int):
@@ -188,6 +187,8 @@ class DataPointSeriesRepository(
             "user_connection_id",
             "software_version",
             "device_type",
+            "device_id",
+            "app_id",
             "series_type",
             "data_source_id",
         ):
@@ -240,7 +241,7 @@ class DataPointSeriesRepository(
             software_versions: dict[DataSourceIdentity, str] = {}
             user_connection_id = provider_creators[0].user_connection_id if provider_creators else None
             for c in provider_creators:
-                identity = (c.user_id, c.device_model, c.source)
+                identity = (c.user_id, c.device_model, c.source, c.device_id, c.app_id)
                 unique_identities.add(identity)
                 if c.device_type:
                     reported_types.setdefault(identity, c.device_type)
@@ -283,7 +284,13 @@ class DataPointSeriesRepository(
         """
         rows: list[DataPointSeriesRepository._StagingRow] = []
         for creator in creators:
-            identity: DataSourceIdentity = (creator.user_id, creator.device_model, creator.source)
+            identity: DataSourceIdentity = (
+                creator.user_id,
+                creator.device_model,
+                creator.source,
+                creator.device_id,
+                creator.app_id,
+            )
             source_id = source_map.get(identity)
             if not source_id:
                 # Should not happen if resolve logic is correct, but safe skip.
@@ -407,6 +414,8 @@ class DataPointSeriesRepository(
             software_version=creator.software_version,
             source=creator.source,
             reported_type=creator.device_type,
+            device_id=creator.device_id,
+            app_id=creator.app_id,
         )
 
     def get_samples(

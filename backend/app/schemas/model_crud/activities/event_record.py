@@ -88,6 +88,8 @@ class EventRecordCreate(EventRecordBase):
     data_source_id: UUID | None = None
     software_version: str | None = None
     device_type: DeviceType | None = None
+    device_id: str | None = None
+    app_id: str | None = None
 
 
 class EventRecordUpdate(EventRecordBase):

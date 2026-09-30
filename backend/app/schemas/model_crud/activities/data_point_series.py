@@ -39,6 +39,8 @@ class TimeSeriesSampleCreate(TimeSeriesSampleBase):
     user_connection_id: UUID | None = None
     software_version: str | None = None
     device_type: DeviceType | None = None
+    device_id: str | None = None
+    app_id: str | None = None
 
 
 class TimeSeriesSampleUpdate(TimeSeriesSampleBase):

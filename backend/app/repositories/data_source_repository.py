@@ -6,6 +6,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.sql.elements import ColumnElement
 
 from app.constants.devices_map import infer_device_type
+from app.constants.devices_map.data_source_identity import stable_ids
 from app.constants.sdk_providers import sdk_providers
 from app.database import DbSession
 from app.models import DataSource, HealthScore, ProviderPriority
@@ -14,6 +15,9 @@ from app.repositories.repositories import CrudRepository
 from app.schemas.enums import DeviceType, ProviderName
 from app.schemas.model_crud.data_priority import DataSourceCreate, DataSourceUpdate
 
+# (user_id, device_model, source, device_id, app_id)
+DataSourceIdentity = tuple[UUID, str | None, str | None, str | None, str | None]
+
 
 class DataSourceRepository(
     CrudRepository[DataSource, DataSourceCreate, DataSourceUpdate],
@@ -21,20 +25,54 @@ class DataSourceRepository(
     def __init__(self, model: type[DataSource] = DataSource):
         super().__init__(model)
 
-    def _build_identity_filter(
+    def _legacy_filter(
         self,
         user_id: UUID,
         provider: ProviderName,
         device_model: str | None,
         source: str | None,
     ) -> ColumnElement[bool]:
-        conditions = [
+        return and_(
             self.model.user_id == user_id,
             self.model.provider == provider,
+            self.model.device_id.is_(None),
+            self.model.app_id.is_(None),
             func.coalesce(self.model.device_model, "") == (device_model or ""),
             func.coalesce(self.model.source, "") == (source or ""),
-        ]
-        return and_(*conditions)
+        )
+
+    def _find(self, db_session: DbSession, provider: ProviderName, identity: DataSourceIdentity) -> DataSource | None:
+        """Look up by the most stable identifier present: device id, then app id + model, then model + source."""
+        user_id, device_model, source, device_id, app_id = identity
+        query = db_session.query(self.model).filter(self.model.user_id == user_id, self.model.provider == provider)
+        if device_id:
+            return query.filter(self.model.device_id == device_id).one_or_none()
+        if app_id:
+            return query.filter(
+                self.model.device_id.is_(None),
+                self.model.app_id == app_id,
+                func.coalesce(self.model.device_model, "") == (device_model or ""),
+            ).one_or_none()
+        return (
+            db_session.query(self.model)
+            .filter(self._legacy_filter(user_id, provider, device_model, source))
+            .one_or_none()
+        )
+
+    def _stampable(
+        self, db_session: DbSession, provider: ProviderName, identity: DataSourceIdentity
+    ) -> DataSource | None:
+        """Row written before its stable ids were known (app-id row for a new device id, else a legacy row)."""
+        user_id, device_model, source, device_id, app_id = identity
+        if (
+            device_id
+            and app_id
+            and (row := self._find(db_session, provider, (user_id, device_model, source, None, app_id)))
+        ):
+            return row
+        if device_id or app_id:
+            return self._find(db_session, provider, (user_id, device_model, source, None, None))
+        return None
 
     def get_by_identity(
         self,
@@ -43,12 +81,10 @@ class DataSourceRepository(
         provider: ProviderName,
         device_model: str | None = None,
         source: str | None = None,
+        device_id: str | None = None,
+        app_id: str | None = None,
     ) -> DataSource | None:
-        return (
-            db_session.query(self.model)
-            .filter(self._build_identity_filter(user_id, provider, device_model, source))
-            .one_or_none()
-        )
+        return self._find(db_session, provider, (user_id, device_model, source, device_id, app_id))
 
     def ensure_data_source(
         self,
@@ -61,55 +97,88 @@ class DataSourceRepository(
         source: str | None = None,
         original_source_name: str | None = None,
         reported_type: DeviceType | None = None,
+        device_id: str | None = None,
+        app_id: str | None = None,
     ) -> DataSource:
-        existing = self.get_by_identity(db_session, user_id, provider, device_model, source)
-        if existing:
-            updated = False
-            if user_connection_id and existing.user_connection_id is None:
-                object.__setattr__(existing, "user_connection_id", user_connection_id)
-                updated = True
-            if software_version and existing.software_version is None:
-                object.__setattr__(existing, "software_version", software_version)
-                updated = True
-            if original_source_name and existing.original_source_name is None:
-                object.__setattr__(existing, "original_source_name", original_source_name)
-                updated = True
-            device_type = self.next_device_type(
-                provider,
-                existing.device_type,
-                infer_device_type(
-                    provider,
-                    device_model,
-                    original_source_name or existing.original_source_name or existing.source,
-                    reported_type,
-                ),
-            )
-            if device_type != existing.device_type:
-                object.__setattr__(existing, "device_type", device_type)
-                updated = True
-            if updated:
-                db_session.flush()
-            return existing
-
-        provider_priority_repo = ProviderPriorityRepository(ProviderPriority)
-        provider_priority_repo.ensure_provider_exists(db_session, provider)
-
-        device_type = infer_device_type(provider, device_model, original_source_name or source, reported_type)
-
-        create_payload = DataSourceCreate(
-            id=uuid4(),
-            user_id=user_id,
-            provider=provider,
+        return self._resolve(
+            db_session,
+            provider,
+            (user_id, device_model, source, *stable_ids(provider, device_id, app_id)),
             user_connection_id=user_connection_id,
-            device_model=device_model,
             software_version=software_version,
-            source=source,
-            device_type=device_type.value if device_type != DeviceType.UNKNOWN else None,
             original_source_name=original_source_name,
+            reported_type=reported_type,
         )
-        result = self.create(db_session, create_payload)
-        assert result is not None
-        return result
+
+    def _resolve(
+        self,
+        db_session: DbSession,
+        provider: ProviderName,
+        identity: DataSourceIdentity,
+        user_connection_id: UUID | None = None,
+        software_version: str | None = None,
+        original_source_name: str | None = None,
+        reported_type: DeviceType | None = None,
+    ) -> DataSource:
+        user_id, device_model, source, device_id, app_id = identity
+        existing = self._find(db_session, provider, identity) or self._stampable(db_session, provider, identity)
+        if existing is None:
+            ProviderPriorityRepository(ProviderPriority).ensure_provider_exists(db_session, provider)
+            device_type = infer_device_type(provider, device_model, original_source_name or source, reported_type)
+            stmt = (
+                insert(self.model)
+                .values(
+                    id=uuid4(),
+                    user_id=user_id,
+                    provider=provider,
+                    user_connection_id=user_connection_id,
+                    device_model=device_model,
+                    software_version=software_version,
+                    source=source,
+                    device_type=device_type.value if device_type != DeviceType.UNKNOWN else None,
+                    original_source_name=original_source_name,
+                    device_id=device_id,
+                    app_id=app_id,
+                )
+                .on_conflict_do_nothing()
+            )
+            db_session.execute(stmt)
+            db_session.flush()
+            created = self._find(db_session, provider, identity)
+            assert created is not None
+            return created
+
+        updates: dict[str, object] = {}
+        if device_id and existing.device_id is None:
+            updates["device_id"] = device_id
+        if app_id and existing.app_id is None:
+            updates["app_id"] = app_id
+        # Device-keyed rows can learn their model later (e.g. Polar sleep before the exercise)
+        if device_id and device_model and existing.device_model is None:
+            updates["device_model"] = device_model
+        if user_connection_id and existing.user_connection_id is None:
+            updates["user_connection_id"] = user_connection_id
+        if software_version and existing.software_version is None:
+            updates["software_version"] = software_version
+        if original_source_name and existing.original_source_name is None:
+            updates["original_source_name"] = original_source_name
+        device_type = self.next_device_type(
+            provider,
+            existing.device_type,
+            infer_device_type(
+                provider,
+                device_model or existing.device_model,
+                original_source_name or existing.original_source_name or existing.source,
+                reported_type,
+            ),
+        )
+        if device_type != existing.device_type:
+            updates["device_type"] = device_type
+        for field, value in updates.items():
+            object.__setattr__(existing, field, value)
+        if updates:
+            db_session.flush()
+        return existing
 
     @staticmethod
     def next_device_type(provider: ProviderName, current: str | None, resolved: DeviceType) -> str | None:
@@ -120,93 +189,30 @@ class DataSourceRepository(
             return resolved.value
         return current
 
-    @staticmethod
-    def _identity_key(identity: tuple[UUID, str | None, str | None]) -> tuple[UUID, str, str]:
-        user_id, device_model, source = identity
-        return user_id, device_model or "", source or ""
-
     def batch_ensure_data_sources(
         self,
         db_session: DbSession,
         provider: ProviderName,
         user_connection_id: UUID | None,
-        identities: set[tuple[UUID, str | None, str | None]],
-        reported_types: dict[tuple[UUID, str | None, str | None], DeviceType] | None = None,
-        software_versions: dict[tuple[UUID, str | None, str | None], str] | None = None,
-    ) -> dict[tuple[UUID, str | None, str | None], UUID]:
-        if not identities:
-            return {}
-
-        identities_list = list(identities)
-
-        from sqlalchemy import or_
-
-        conditions = []
-        for user_id, device_model, source in identities_list:
-            conditions.append(self._build_identity_filter(user_id, provider, device_model, source))
-
-        existing = db_session.query(self.model).filter(or_(*conditions)).all()
-
+        identities: set[DataSourceIdentity],
+        reported_types: dict[DataSourceIdentity, DeviceType] | None = None,
+        software_versions: dict[DataSourceIdentity, str] | None = None,
+    ) -> dict[DataSourceIdentity, UUID]:
+        """Resolve each distinct identity in a batch; a batch holds only a handful of devices."""
         reported_types = reported_types or {}
         software_versions = software_versions or {}
-        # Keyed like the identity index (NULL == ""), so stored "" still resolves requests with None
-        requested = {self._identity_key(i): i for i in identities_list}
-        result: dict[tuple[UUID, str | None, str | None], UUID] = {}
-        upgraded = False
-        for ds in existing:
-            identity = requested.get(self._identity_key((ds.user_id, ds.device_model, ds.source)))
-            if identity is None:
-                continue
-            result[identity] = ds.id
-            if ds.software_version is None and (version := software_versions.get(identity)):
-                object.__setattr__(ds, "software_version", version)
-                upgraded = True
-            device_type = self.next_device_type(
+        result: dict[DataSourceIdentity, UUID] = {}
+        for identity in identities:
+            user_id, device_model, source, device_id, app_id = identity
+            data_source = self._resolve(
+                db_session,
                 provider,
-                ds.device_type,
-                infer_device_type(
-                    provider, ds.device_model, ds.original_source_name or ds.source, reported_types.get(identity)
-                ),
+                (user_id, device_model, source, *stable_ids(provider, device_id, app_id)),
+                user_connection_id=user_connection_id,
+                software_version=software_versions.get(identity),
+                reported_type=reported_types.get(identity),
             )
-            if device_type != ds.device_type:
-                object.__setattr__(ds, "device_type", device_type)
-                upgraded = True
-        if upgraded:
-            db_session.flush()
-
-        missing = [i for i in identities_list if i not in result]
-
-        if missing:
-            values = []
-            for user_id, device_model, source in missing:
-                device_type = infer_device_type(
-                    provider, device_model, source, reported_types.get((user_id, device_model, source))
-                )
-                values.append(
-                    {
-                        "id": uuid4(),
-                        "user_id": user_id,
-                        "provider": provider,
-                        "user_connection_id": user_connection_id,
-                        "device_model": device_model,
-                        "software_version": software_versions.get((user_id, device_model, source)),
-                        "source": source,
-                        "device_type": device_type.value if device_type != DeviceType.UNKNOWN else None,
-                    }
-                )
-            stmt = insert(self.model).values(values).on_conflict_do_nothing()
-            db_session.execute(stmt)
-            db_session.flush()
-
-            conditions = []
-            for user_id, device_model, source in missing:
-                conditions.append(self._build_identity_filter(user_id, provider, device_model, source))
-
-            newly_inserted = db_session.query(self.model).filter(or_(*conditions)).all()
-            for ds in newly_inserted:
-                if identity := requested.get(self._identity_key((ds.user_id, ds.device_model, ds.source))):
-                    result[identity] = ds.id
-
+            result[identity] = data_source.id
         return result
 
     def get_user_data_sources(
