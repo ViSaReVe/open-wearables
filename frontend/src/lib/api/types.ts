@@ -367,7 +367,7 @@ export interface SleepSession {
   end_time: string;
   source: SourceMetadata;
   duration_seconds: number;
-  sleep_duration_seconds: number | null;
+  sleep_duration_minutes: number | null;
   efficiency_percent: number | null;
   stages: SleepStagesSummary | null;
   sleep_stage_intervals: SleepStage[] | null;
@@ -475,7 +475,7 @@ export interface BodySummaryParams {
 export interface RecoverySummary {
   date: string;
   source: SourceMetadata;
-  sleep_duration_seconds: number | null;
+  sleep_duration_minutes: number | null;
   sleep_efficiency_percent: number | null;
   resting_heart_rate_bpm: number | null;
   avg_hrv_sdnn_ms: number | null;

@@ -136,7 +136,7 @@ class TestEventRecordServiceCreateDetail:
         assert kwargs["record_id"] == event_record.id
         assert kwargs["source_app"] == "oura"
         assert kwargs["device_type"] == "ring"
-        assert kwargs["sleep_duration_seconds"] == 90 * 60
+        assert kwargs["sleep_duration_minutes"] == 90
         assert kwargs["sleep_stage_intervals"] == [stage.model_dump(mode="json")]
 
 
@@ -780,7 +780,7 @@ class TestCreateOrMergeSleep:
         assert kwargs["record_id"] == result.id
         assert kwargs["source_app"] == "oura"
         assert kwargs["device_type"] == "ring"
-        assert kwargs["sleep_duration_seconds"] == detail.sleep_total_duration_minutes * 60
+        assert kwargs["sleep_duration_minutes"] == detail.sleep_total_duration_minutes
         assert kwargs["sleep_stage_intervals"] == [stage.model_dump(mode="json")]
 
     def test_skips_data_source_lookup_when_svix_disabled(self, db: Session) -> None:
@@ -915,7 +915,7 @@ class TestGetSleepSessions:
     """Test get_sleep_sessions response fields."""
 
     def test_returns_sleep_duration_and_time_in_bed_when_details_present(self, db: Session) -> None:
-        """sleep_duration_seconds should come from sleep_total_duration_minutes; duration_seconds stays time-in-bed."""
+        """sleep_duration_minutes should come from sleep_total_duration_minutes; duration_seconds stays time-in-bed."""
         user = UserFactory()
         mapping = DataSourceFactory(user=user, source="oura")
         start = datetime(2026, 4, 10, 23, 0, tzinfo=timezone.utc)
@@ -942,7 +942,7 @@ class TestGetSleepSessions:
 
         session = next(s for s in response.data if s.id == record.id)
         assert session.duration_seconds == 28800  # time in bed (unchanged)
-        assert session.sleep_duration_seconds == 450 * 60  # actual sleep
+        assert session.sleep_duration_minutes == 450  # actual sleep
 
     def test_unreported_stages_stay_null_instead_of_reading_as_zero(self, db: Session) -> None:
         """A provider that does not measure a stage must not show the user zero minutes of it."""
@@ -1053,7 +1053,7 @@ class TestGetSleepSessions:
         assert len(fetch(data_source_id=oura.id)) == 1
 
     def test_sleep_duration_none_when_details_missing(self, db: Session) -> None:
-        """sleep_duration_seconds should be None if SleepDetails has no total duration."""
+        """sleep_duration_minutes should be None if SleepDetails has no total duration."""
         user = UserFactory()
         mapping = DataSourceFactory(user=user, source="oura")
         record = EventRecordFactory(
@@ -1072,7 +1072,7 @@ class TestGetSleepSessions:
 
         session = next(s for s in response.data if s.id == record.id)
         assert session.duration_seconds == 28800
-        assert session.sleep_duration_seconds is None
+        assert session.sleep_duration_minutes is None
 
     def _nap_mix(self, mapping: DataSource) -> dict[str, EventRecord]:
         """One nap plus main sleeps flagged False, flagged NULL and without a detail row."""

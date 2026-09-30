@@ -174,7 +174,7 @@ class BodySummary(BaseModel):
 class RecoverySummary(BaseModel):
     date: date
     source: SourceMetadata
-    sleep_duration_seconds: int | None = None
+    sleep_duration_minutes: int | None = None
     sleep_efficiency_percent: float | None = None
     resting_heart_rate_bpm: int | None = None
     avg_hrv_sdnn_ms: float | None = Field(

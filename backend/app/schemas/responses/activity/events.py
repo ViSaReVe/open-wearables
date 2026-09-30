@@ -85,7 +85,7 @@ class SleepSession(BaseModel):
     zone_offset: str | None = None
     source: SourceMetadata
     duration_seconds: int
-    sleep_duration_seconds: int | None = None
+    sleep_duration_minutes: int | None = None
     time_in_bed_seconds: int | None = None
     efficiency_percent: float | None = None
     stages: SleepStagesSummary | None = None

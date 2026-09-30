@@ -296,11 +296,7 @@ class EventRecordService(
                 is_nap=final_detail.is_nap,
                 source_app=record.source,
                 device_type=device_type,
-                sleep_duration_seconds=(
-                    final_detail.sleep_total_duration_minutes * 60
-                    if final_detail.sleep_total_duration_minutes is not None
-                    else None
-                ),
+                sleep_duration_minutes=final_detail.sleep_total_duration_minutes,
                 sleep_stage_intervals=(
                     [stage.model_dump(mode="json") for stage in final_detail.sleep_stages]
                     if final_detail.sleep_stages
@@ -585,11 +581,7 @@ class EventRecordService(
                     is_nap=detail.is_nap,
                     source_app=data_source.source,
                     device_type=data_source.device_type,
-                    sleep_duration_seconds=(
-                        detail.sleep_total_duration_minutes * 60
-                        if detail.sleep_total_duration_minutes is not None
-                        else None
-                    ),
+                    sleep_duration_minutes=detail.sleep_total_duration_minutes,
                     sleep_stage_intervals=(
                         [stage.model_dump(mode="json") for stage in detail.sleep_stages]
                         if detail.sleep_stages
@@ -919,7 +911,7 @@ class EventRecordService(
         for record, data_source in records:
             details: SleepDetails | None = record.sleep_detail
 
-            sleep_duration_seconds = minutes_to_seconds(details.sleep_total_duration_minutes) if details else None
+            sleep_duration_minutes = details.sleep_total_duration_minutes if details else None
             time_in_bed_seconds = minutes_to_seconds(details.sleep_time_in_bed_minutes) if details else None
             session = SleepSession(
                 id=record.id,
@@ -928,7 +920,7 @@ class EventRecordService(
                 zone_offset=record.zone_offset,
                 source=self._map_source(data_source),
                 duration_seconds=record.duration_seconds or 0,
-                sleep_duration_seconds=sleep_duration_seconds,
+                sleep_duration_minutes=sleep_duration_minutes,
                 time_in_bed_seconds=time_in_bed_seconds,
                 efficiency_percent=as_float(details.sleep_efficiency_score) if details else None,
                 is_nap=details.is_nap if (details and details.is_nap is not None) else False,

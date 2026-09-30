@@ -156,7 +156,7 @@ def on_sleep_created(
     is_nap: bool | None = None,
     source_app: str | None = None,
     device_type: str | None = None,
-    sleep_duration_seconds: float | None = None,
+    sleep_duration_minutes: int | None = None,
     sleep_stage_intervals: list[dict[str, Any]] | None = None,
 ) -> None:
     _dispatch(
@@ -170,7 +170,7 @@ def on_sleep_created(
                 "end_time": end_time,
                 "zone_offset": zone_offset,
                 "duration_seconds": duration_seconds,
-                "sleep_duration_seconds": sleep_duration_seconds,
+                "sleep_duration_minutes": sleep_duration_minutes,
                 "source": {
                     "provider": provider,
                     "source": source_app,

@@ -422,7 +422,7 @@ class SummariesService:
                     device=r.get("device_model"),
                     device_type=r.get("device_type"),
                 ),
-                sleep_duration_seconds=None,
+                sleep_duration_minutes=None,
                 sleep_efficiency_percent=None,
                 resting_heart_rate_bpm=int(r["resting_heart_rate"])
                 if r.get("resting_heart_rate") is not None

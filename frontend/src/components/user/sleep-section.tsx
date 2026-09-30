@@ -250,8 +250,8 @@ function SleepSessionRow({
                 <Moon className="h-4 w-4 text-indigo-400" />
                 <div>
                   <p className="text-sm font-medium text-foreground">
-                    {session.sleep_duration_seconds !== null
-                      ? formatDuration(session.sleep_duration_seconds)
+                    {session.sleep_duration_minutes !== null
+                      ? formatMinutes(session.sleep_duration_minutes)
                       : '-'}
                   </p>
                   <p className="text-xs text-muted-foreground">Duration</p>

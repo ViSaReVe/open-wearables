@@ -13943,7 +13943,7 @@
           "source": {
             "$ref": "#/components/schemas/SourceMetadata"
           },
-          "sleep_duration_seconds": {
+          "sleep_duration_minutes": {
             "anyOf": [
               {
                 "type": "integer"
@@ -13952,7 +13952,7 @@
                 "type": "null"
               }
             ],
-            "title": "Sleep Duration Seconds"
+            "title": "Sleep Duration Minutes"
           },
           "sleep_efficiency_percent": {
             "anyOf": [
@@ -14726,7 +14726,7 @@
             "type": "integer",
             "title": "Duration Seconds"
           },
-          "sleep_duration_seconds": {
+          "sleep_duration_minutes": {
             "anyOf": [
               {
                 "type": "integer"
@@ -14735,7 +14735,7 @@
                 "type": "null"
               }
             ],
-            "title": "Sleep Duration Seconds"
+            "title": "Sleep Duration Minutes"
           },
           "time_in_bed_seconds": {
             "anyOf": [

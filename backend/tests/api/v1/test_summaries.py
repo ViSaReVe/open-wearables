@@ -1612,7 +1612,7 @@ class TestRecoverySummaryEndpoint:
         assert item["resting_heart_rate_bpm"] is None
         assert item["avg_hrv_sdnn_ms"] is None
         assert item["avg_spo2_percent"] is None
-        assert item["sleep_duration_seconds"] is None
+        assert item["sleep_duration_minutes"] is None
         assert item["sleep_efficiency_percent"] is None
 
     def test_pagination_limit(self, client: TestClient, db: Session) -> None:

@@ -111,7 +111,7 @@ class TestWebhookEmit:
             is_nap=False,
             source_app="oura",
             device_type="ring",
-            sleep_duration_seconds=27000,
+            sleep_duration_minutes=450,
             sleep_stage_intervals=[
                 {"stage": "light", "start_time": "2026-01-01T22:00:00", "end_time": "2026-01-01T22:30:00"}
             ],
@@ -121,7 +121,7 @@ class TestWebhookEmit:
         assert args[0][0] == "sleep.created"
         assert args[0][1]["data"]["efficiency_percent"] == 85.0
         assert args[0][1]["data"]["stages"]["deep_minutes"] == 90
-        assert args[0][1]["data"]["sleep_duration_seconds"] == 27000
+        assert args[0][1]["data"]["sleep_duration_minutes"] == 450
         assert args[0][1]["data"]["sleep_stage_intervals"][0]["stage"] == "light"
         assert args[0][1]["data"]["source"]["source"] == "oura"
         assert args[0][1]["data"]["source"]["device_type"] == "ring"
