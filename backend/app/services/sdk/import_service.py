@@ -57,6 +57,9 @@ from .sleep_service import handle_sleep_data
 # in mg/dL round-trip with a ~0.1% offset under this factor.
 MMOL_L_TO_MG_DL = Decimal("18.0182")
 
+# Energy series stored in kcal.
+_KCAL_SERIES = frozenset({SeriesType.dietary_energy_consumed, SeriesType.dietary_energy_from_fat})
+
 # Dietary series types plus hydration.
 _MEAL_NUTRIENT_SERIES_TYPES = frozenset(
     {st for st in SeriesType if st.value.startswith("dietary_")} | {SeriesType.hydration}
@@ -327,6 +330,9 @@ class ImportService:
             # Convert hydration units to mL
             if series_type == SeriesType.hydration and unit in ("l", "liter", "liters", "litre", "litres"):
                 value *= 1000
+
+            if series_type in _KCAL_SERIES and unit == "cal":
+                value = value / 1000
 
             # Extract device info
             device_model, software_version, original_source_name = extract_device_info(rjson.source)

@@ -717,6 +717,32 @@ class TestSDKImportUnitConversion:
     @pytest.mark.parametrize(
         ("unit", "expected"),
         [
+            ("cal", Decimal("450")),
+            ("Cal", Decimal("450000")),
+            ("kcal", Decimal("450000")),
+            (None, Decimal("450000")),
+        ],
+    )
+    def test_dietary_energy_small_calories_converted_to_kcal(
+        self,
+        import_service: ImportService,
+        unit: str | None,
+        expected: Decimal,
+    ) -> None:
+        """Dietary energy is stored in kcal; only a small-calorie ("cal") unit is divided by 1000."""
+        request = self._build_request(
+            "health_connect",
+            [self._record("DIETARY_ENERGY", 450000, unit=unit)],
+        )
+        samples = import_service._build_statistic_bundles(request.data.records, request.provider, str(uuid4()))
+
+        assert len(samples) == 1
+        assert samples[0].series_type == SeriesType.dietary_energy_consumed
+        assert samples[0].value == expected
+
+    @pytest.mark.parametrize(
+        ("unit", "expected"),
+        [
             ("mmol/L", Decimal("110.1092202")),
             ("MMOL/L", Decimal("110.1092202")),
             (None, Decimal("6.111")),
