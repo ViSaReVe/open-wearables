@@ -13137,7 +13137,7 @@
         },
         "type": "object",
         "title": "MealConfig",
-        "description": "Parameters controlling meal generation.\n\nEach meal is an EventRecord (category=\"meal\") plus a MealDetails row and a\nhandful of nutrient DataPointSeries samples (calories, protein, carbs, fat,\nfiber, hydration) correlated to it via event_record_id. Meal type (breakfast/\nlunch/dinner/snack) is always picked at random - a single flat meal_count is\nsimpler for a tester to reason about (\"give me 10k meals\") than a per-day\nrange combined with a separate date-window length."
+        "description": "Parameters controlling meal generation.\n\nEach meal is an EventRecord (category=\"meal\") plus a MealDetails row and a\nhandful of nutrient DataPointSeries samples (calories, protein, carbs, fat,\nfiber, hydration) correlated to it via event_record_id."
       },
       "MealField": {
         "properties": {
