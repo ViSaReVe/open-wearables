@@ -9,6 +9,7 @@ from app.schemas.enums import SeriesType
 from app.schemas.enums.workout_types import WorkoutType
 from app.schemas.providers.withings import WithingsWorkout
 from app.services.providers.withings.data_247 import Withings247Data
+from app.services.providers.withings.handlers.rpc_client import WithingsAPIError
 from app.services.providers.withings.workouts import WithingsWorkouts
 
 
@@ -245,6 +246,40 @@ def test_sleep_hrv_readings_become_samples_of_their_night(
     }
     detail = mock_event.create_or_merge_sleep.call_args.args[3]
     assert detail.sleep_stages[0].stage.value == "light"
+
+
+@patch("app.services.providers.withings.data_247.timeseries_service")
+@patch("app.services.providers.withings.data_247.event_record_service")
+@patch(
+    "app.services.providers.withings.data_247.withings_request",
+    side_effect=[WithingsAPIError(withings_status=2555, action="get"), SERIES_BODY, {"series": []}],
+)
+@patch("app.services.providers.withings.data_247.paginate")
+def test_hypnogram_survives_the_hrv_fields_being_refused(
+    mock_paginate: MagicMock, mock_request: MagicMock, mock_event: MagicMock, mock_timeseries: MagicMock
+) -> None:
+    # A plan without the HRV pack must still get its stages.
+    _save_one_night(mock_paginate)
+
+    detail = mock_event.create_or_merge_sleep.call_args.args[3]
+    assert [stage.stage.value for stage in detail.sleep_stages] == ["light", "deep", "awake", "sleeping", "awake"]
+    assert "data_fields" not in mock_request.call_args_list[1].kwargs["params"]
+
+
+@patch("app.services.providers.withings.data_247.timeseries_service")
+@patch("app.services.providers.withings.data_247.event_record_service")
+@patch(
+    "app.services.providers.withings.data_247.withings_request",
+    side_effect=WithingsAPIError(withings_status=601, action="get"),
+)
+@patch("app.services.providers.withings.data_247.paginate")
+def test_throttled_hypnogram_is_not_asked_again_without_the_hrv_fields(
+    mock_paginate: MagicMock, mock_request: MagicMock, mock_event: MagicMock, mock_timeseries: MagicMock
+) -> None:
+    # withings_request has already backed off; asking again would wait out the quota twice.
+    _save_one_night(mock_paginate)
+
+    assert mock_request.call_count == 1
 
 
 @patch("app.services.providers.withings.data_247.timeseries_service")

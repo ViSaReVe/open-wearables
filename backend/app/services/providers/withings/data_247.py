@@ -40,7 +40,12 @@ from app.services.providers.withings.coverage import (
     MEASURE_UNIT_FACTOR,
     SLEEP_HRV_FIELD_MAP,
 )
-from app.services.providers.withings.handlers.rpc_client import paginate, scale_measure, withings_request
+from app.services.providers.withings.handlers.rpc_client import (
+    WithingsAPIError,
+    paginate,
+    scale_measure,
+    withings_request,
+)
 from app.services.providers.withings.handlers.timezone import local_day_start, zone_offset_at
 from app.services.timeseries_service import timeseries_service
 from app.utils.dates import parse_datetime_or_default
@@ -377,9 +382,14 @@ class Withings247Data(Base247DataTemplate):
         starts = sorted(datetime.fromtimestamp(night.start, tz=timezone.utc) for night in nights)
         end_dt = datetime.fromtimestamp(max(night.end for night in nights), tz=timezone.utc)
         cursor = starts[0]
+        data_fields = ",".join(SLEEP_SERIES.data_fields)
         # A page reaches at least a day and a night is shorter, so a night costs at most
-        # two: one for its stages, one for the empty stretch that follows it.
-        for _ in range(2 * len(nights)):
+        # two: one for its stages, one for the empty stretch that follows it. Plus one
+        # retry without the HRV fields.
+        for _ in range(2 * len(nights) + 1):
+            params = {"startdate": int(cursor.timestamp()), "enddate": int(end_dt.timestamp())}
+            if data_fields:
+                params["data_fields"] = data_fields
             try:
                 body = withings_request(
                     db=db,
@@ -388,13 +398,22 @@ class Withings247Data(Base247DataTemplate):
                     oauth=self.oauth,
                     service_path=SLEEP_SERIES.service_path,
                     action=SLEEP_SERIES.action,
-                    params={
-                        "startdate": int(cursor.timestamp()),
-                        "enddate": int(end_dt.timestamp()),
-                        "data_fields": ",".join(SLEEP_SERIES.data_fields),
-                    },
+                    params=params,
                 )
             except Exception as e:
+                # HRV is paid-pack and a free plan may refuse the fields; the stages must survive
+                # that. A throttle or lost grant would fail without them too, so only 502 retries.
+                if data_fields and isinstance(e, WithingsAPIError) and e.status_code == 502:
+                    log_structured(
+                        logger,
+                        "warning",
+                        "Withings sleep series failed with the HRV fields; retrying without them",
+                        provider="withings",
+                        user_id=str(user_id),
+                        error=str(e),
+                    )
+                    data_fields = ""
+                    continue
                 log_and_capture_error(
                     e,
                     logger,
