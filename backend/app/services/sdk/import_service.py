@@ -331,7 +331,9 @@ class ImportService:
             if series_type == SeriesType.hydration and unit in ("l", "liter", "liters", "litre", "litres"):
                 value *= 1000
 
-            if series_type in _KCAL_SERIES and unit == "cal":
+            # Energy is stored in kcal. Case matters: "cal" is a small calorie (1/1000 kcal),
+            # "Cal" is the food Calorie (= kcal).
+            if series_type in _KCAL_SERIES and (rjson.unit or "").strip() == "cal":
                 value = value / 1000
 
             # Extract device info
