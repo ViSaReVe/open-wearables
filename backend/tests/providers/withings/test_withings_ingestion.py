@@ -203,6 +203,64 @@ def test_sleep_row_stores_the_hypnogram(
     assert mock_request.call_args.kwargs["action"] == "get"
 
 
+HRV_SERIES_BODY = {
+    "series": [
+        {
+            "startdate": 1594159200,
+            "enddate": 1594160100,
+            "state": 1,
+            "rmssd": {"1594159200": 25, "1594159260": 0, "1594159320": None},
+        },
+        # Unmapped state, but its readings still count.
+        {"startdate": 1594160100, "enddate": 1594163700, "state": 99, "sdnn_1": {"1594160100": 30}},
+        # After the night ends, so no night claims it.
+        {"startdate": 1594188000, "enddate": 1594188600, "state": 0, "rmssd": {"1594188300": 40}},
+    ]
+}
+
+
+def _saved_hrv(mock_timeseries: MagicMock) -> dict[SeriesType, list[float]]:
+    samples = mock_timeseries.bulk_create_samples.call_args.args[1]
+    hrv: dict[SeriesType, list[float]] = {}
+    for sample in samples:
+        if sample.series_type in (SeriesType.heart_rate_variability_rmssd, SeriesType.heart_rate_variability_sdnn):
+            hrv.setdefault(sample.series_type, []).append(float(sample.value))
+    return hrv
+
+
+@patch("app.services.providers.withings.data_247.timeseries_service")
+@patch("app.services.providers.withings.data_247.event_record_service")
+@patch("app.services.providers.withings.data_247.withings_request", side_effect=[HRV_SERIES_BODY, {"series": []}])
+@patch("app.services.providers.withings.data_247.paginate")
+def test_sleep_hrv_readings_become_samples_of_their_night(
+    mock_paginate: MagicMock, mock_request: MagicMock, mock_event: MagicMock, mock_timeseries: MagicMock
+) -> None:
+    _save_one_night(mock_paginate)
+
+    assert mock_request.call_args.kwargs["params"]["data_fields"] == "rmssd,sdnn_1"
+    # 0 and null are missed readings; their interval keeps its stage.
+    assert _saved_hrv(mock_timeseries) == {
+        SeriesType.heart_rate_variability_rmssd: [25.0],
+        SeriesType.heart_rate_variability_sdnn: [30.0],
+    }
+    detail = mock_event.create_or_merge_sleep.call_args.args[3]
+    assert detail.sleep_stages[0].stage.value == "light"
+
+
+@patch("app.services.providers.withings.data_247.timeseries_service")
+@patch("app.services.providers.withings.data_247.event_record_service")
+@patch("app.services.providers.withings.data_247.withings_request", side_effect=[HRV_SERIES_BODY, {"series": []}])
+@patch("app.services.providers.withings.data_247.paginate")
+def test_sleep_hrv_is_kept_for_a_night_without_a_lowest_heart_rate(
+    mock_paginate: MagicMock, mock_request: MagicMock, mock_event: MagicMock, mock_timeseries: MagicMock
+) -> None:
+    mock_paginate.return_value = MagicMock(rows=[{**SLEEP_ROW, "data": {**SLEEP_ROW["data"], "hr_min": None}}])
+
+    _data_247().save_sleep(MagicMock(), uuid4(), *_WINDOW)
+
+    assert SeriesType.heart_rate_variability_rmssd in _saved_hrv(mock_timeseries)
+
+
 @patch("app.services.providers.withings.data_247.timeseries_service")
 @patch("app.services.providers.withings.data_247.event_record_service")
 @patch("app.services.providers.withings.data_247.withings_request", side_effect=RuntimeError("boom"))
