@@ -325,7 +325,7 @@ class Polar247Data(Base247DataTemplate):
                 "from": chunk_start.date().isoformat(),
                 "to": chunk_end.date().isoformat(),
                 "steps": "true",
-                "activity_zones": "false",
+                "activity_zones": "true",
                 "inactivity_stamps": "false",
             }
             response = self._make_api_request(db, user_id, "/v3/users/activities", params=params)
