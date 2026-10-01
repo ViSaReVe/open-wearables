@@ -65,7 +65,16 @@ async def _lifespan(_: FastAPI) -> AsyncGenerator[None, None]:
         await asyncio.to_thread(endpoint_usage.flush)
 
 
-api = FastAPI(title=settings.api_name, version=version("open-wearables"), lifespan=_lifespan)
+# Turn off FastAPI's own OpenTelemetry signals and its automatic exporter setup. Without
+# this, FastAPI records request traces, metrics or exception logs as soon as an
+# OpenTelemetry provider for that signal is installed, and installs exporters itself when
+# OTEL_EXPORTER_OTLP_ENDPOINT is set and the OTLP exporter packages are present.
+api = FastAPI(
+    title=settings.api_name,
+    version=version("open-wearables"),
+    lifespan=_lifespan,
+    telemetry={"auto_configure": False, "tracing": False, "metrics": False, "logs": False},
+)
 celery_app = create_celery()
 init_sentry()
 raw_payload_storage.configure(
