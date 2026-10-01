@@ -20,6 +20,8 @@ from app.utils.config_utils import (
     EncryptedField,
     EnvironmentType,
     FernetDecryptorField,
+    LogFormat,
+    LogLevel,
     parse_duration,
 )
 
@@ -52,6 +54,13 @@ class Settings(BaseSettings):
     log_error_response_body: bool = False
     log_error_response_body_max_bytes: int = 8192  # truncate a logged body
     log_error_response_body_max_per_minute: int = 60  # cap logged bodies/min
+
+    # LOGGING SETTINGS
+    # legacy: JSON from log_structured, plain text from stdlib loggers (the output before
+    # LOG_FORMAT existed). json: every line JSON. text: every line human-readable.
+    log_format: LogFormat = LogFormat.LEGACY
+    # None keeps the per-logger defaults (stdlib INFO, log_structured unfiltered).
+    log_level: LogLevel | None = None
 
     # DATABASE SETTINGS
     db_host: str = "db"
@@ -390,6 +399,22 @@ class Settings(BaseSettings):
 
         # This should never be reached given the type annotation, but ensures type safety
         raise ValueError(f"Unexpected type for cors_origins: {type(v)}")
+
+    @field_validator("log_format", mode="before")
+    @classmethod
+    def _parse_log_format(cls, v: Any) -> Any:
+        if isinstance(v, str):
+            return v.strip().lower() or LogFormat.LEGACY
+        return v
+
+    @field_validator("log_level", mode="before")
+    @classmethod
+    def _parse_log_level(cls, v: Any) -> Any:
+        if isinstance(v, str):
+            name = v.strip().upper()
+            # Aliases the logging module accepts, common in shared LOG_LEVEL variables.
+            return {"WARN": "WARNING", "FATAL": "CRITICAL"}.get(name, name) or None
+        return v
 
     @field_validator("pull_sync_lookback", mode="before")
     @classmethod

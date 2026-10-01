@@ -10,6 +10,8 @@ from celery.schedules import crontab
 
 from app.config import settings
 from app.services import raw_payload_storage
+from app.utils.config_utils import LogFormat
+from app.utils.logging_setup import configure_logging
 
 _WEBHOOK_TASK = "emit_webhook_event_task.emit_webhook_event"
 
@@ -35,32 +37,37 @@ def setup_celery_logging(**kwargs) -> None:
     Some platforms convert stderr logs to level.error automatically, so we must use stdout
     to ensure platforms correctly identify log levels from JSON structured logs.
 
-    This signal is called when Celery sets up its logging configuration.
+    This signal is called when Celery sets up its logging configuration. With
+    LOG_FORMAT=json or text the Celery logger has no handler of its own and its records
+    go through the root handler instead, so every line shares one format.
     """
     # Get Celery's logger
     celery_logger = getLogger("celery")
 
     # Remove existing handlers that might use stderr
     celery_logger.handlers.clear()
-
-    # Create a handler that uses stdout
-    stdout_handler = StreamHandler(sys.stdout)
-    stdout_handler.setFormatter(
-        Formatter(
-            "[%(asctime)s - %(name)s] (%(levelname)s) %(message)s",
-            datefmt="%Y-%m-%d %H:%M:%S",
-        )
-    )
-
-    # Add stdout handler to Celery logger
-    celery_logger.addHandler(stdout_handler)
     celery_logger.setLevel(logging.INFO)
-    celery_logger.propagate = False
+
+    if settings.log_format is LogFormat.LEGACY:
+        # Create a handler that uses stdout
+        stdout_handler = StreamHandler(sys.stdout)
+        stdout_handler.setFormatter(
+            Formatter(
+                "[%(asctime)s - %(name)s] (%(levelname)s) %(message)s",
+                datefmt="%Y-%m-%d %H:%M:%S",
+            )
+        )
+        celery_logger.addHandler(stdout_handler)
+        celery_logger.propagate = False
+    else:
+        celery_logger.propagate = True
 
     # celery.app.trace logs "Task ... succeeded in Xs: {result}" at INFO for
     # every task execution.  Suppress those lines only for the high-frequency
     # webhook emit task to avoid log spam while keeping traces for all others.
     getLogger("celery.app.trace").addFilter(_WebhookTraceFilter())
+
+    configure_logging()
 
 
 @signals.worker_ready.connect

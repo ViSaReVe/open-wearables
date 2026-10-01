@@ -24,6 +24,7 @@ from app.services import raw_payload_storage
 from app.services.endpoint_usage import endpoint_usage
 from app.services.outgoing_webhooks import svix as svix_service
 from app.utils.exceptions import DatetimeParseError, handle_exception
+from app.utils.logging_setup import configure_logging
 
 # Configure logging to use stdout instead of stderr
 # Some platforms convert stderr logs to level.error automatically, so we must use stdout
@@ -46,6 +47,8 @@ for _name in ("uvicorn", "uvicorn.error"):
 for _name in ("httpx", "httpcore"):
     logging.getLogger(_name).setLevel(logging.WARNING)
 
+configure_logging()
+
 
 @asynccontextmanager
 async def _lifespan(_: FastAPI) -> AsyncGenerator[None, None]:
@@ -53,6 +56,8 @@ async def _lifespan(_: FastAPI) -> AsyncGenerator[None, None]:
     # dictConfig that re-creates the logger and undoes an import-time disable. Lifespan
     # runs after it, so add_access_log_middleware stays the single access-log source.
     logging.getLogger("uvicorn.access").disabled = True
+    # The same dictConfig resets the uvicorn loggers, so apply LOG_FORMAT/LOG_LEVEL again.
+    configure_logging()
     svix_service.register_event_types()
     yield
     # Hand the last partial interval of telemetry counters to Redis before exiting.
