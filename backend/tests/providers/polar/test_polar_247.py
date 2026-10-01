@@ -241,8 +241,14 @@ class TestPolar247DailyActivityNormalization:
                     {"zone": "LIGHT", "timestamp": None},
                 ]
             },
+            {
+                "samples": [
+                    {"zone": "MODERATE", "timestamp": "2024-01-15T08:00:00"},
+                    {"zone": None, "timestamp": "2024-01-15T09:00:00"},
+                ]
+            },
         ],
-        ids=["no_zones", "null_samples", "unreadable_timestamp", "null_timestamp"],
+        ids=["no_zones", "null_samples", "unreadable_timestamp", "null_timestamp", "null_zone"],
     )
     def test_unusable_zones_give_no_exercise_time(
         self, data_247: Polar247Data, sample_activity: dict, zones: dict | None

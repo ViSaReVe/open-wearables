@@ -61,11 +61,11 @@ class DailyActivityJSON(BaseModel):
         """Whole minutes the day spent in the MODERATE and VIGOROUS activity zones.
 
         A zone sample marks where a segment starts; it lasts until the next sample, the last
-        one until ``end_time``. None when the day carries no zone samples or a timestamp is
-        unreadable, since a skipped sample would stretch its neighbour.
+        one until ``end_time``. None when the day carries no zone samples or a sample lacks its
+        zone or a readable timestamp, since the day's split is then unknown.
         """
         zones = self.samples.activity_zones if self.samples else None
-        if not zones or not zones.samples or not self.end_time:
+        if not zones or not zones.samples or not self.end_time or any(s.zone is None for s in zones.samples):
             return None
         try:
             segments = sorted(
