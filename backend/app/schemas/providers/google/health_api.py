@@ -100,6 +100,7 @@ class ListSpec:
     is_daily_total: True for once-per-day summaries (Daily types), False for raw samples.
     session_interval: True for SessionTimeInterval types (filter on interval.civil_start_time).
     extra:          additional series emitted from the same value object, if any.
+    derived:        series computed from two fields of the same value object, if any.
     """
 
     field: str
