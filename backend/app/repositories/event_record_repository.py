@@ -75,7 +75,8 @@ class EventRecordRepository(
                 original_source_name=creator.source,
                 reported_type=creator.device_type,
                 device_id=creator.device_id,
-                app_id=creator.app_id,
+                source_app_id=creator.source_app_id,
+                device_manufacturer=creator.device_manufacturer,
             )
             data_source_id = data_source.id
 
@@ -90,7 +91,8 @@ class EventRecordRepository(
             "software_version",
             "device_type",
             "device_id",
-            "app_id",
+            "source_app_id",
+            "device_manufacturer",
         ):
             creation_data.pop(redundant_key, None)
         return data_source_id, self.model(**creation_data)
@@ -212,17 +214,26 @@ class EventRecordRepository(
             unique_identities: set[DataSourceIdentity] = set()
             reported_types: dict[DataSourceIdentity, DeviceType] = {}
             software_versions: dict[DataSourceIdentity, str] = {}
+            manufacturers: dict[DataSourceIdentity, str] = {}
             user_connection_id = provider_creators[0].user_connection_id if provider_creators else None
             for c in provider_creators:
-                identity = (c.user_id, c.device_model, c.source, c.device_id, c.app_id)
+                identity = (c.user_id, c.device_model, c.source, c.device_id, c.source_app_id)
                 unique_identities.add(identity)
                 if c.device_type:
                     reported_types.setdefault(identity, c.device_type)
                 if c.software_version:
                     software_versions.setdefault(identity, c.software_version)
+                if c.device_manufacturer:
+                    manufacturers.setdefault(identity, c.device_manufacturer)
 
             batch_result = self.data_source_repo.batch_ensure_data_sources(
-                db_session, provider, user_connection_id, unique_identities, reported_types, software_versions
+                db_session,
+                provider,
+                user_connection_id,
+                unique_identities,
+                reported_types,
+                software_versions,
+                manufacturers,
             )
             identity_to_source_id.update(batch_result)
 
@@ -233,7 +244,7 @@ class EventRecordRepository(
                 creator.device_model,
                 creator.source,
                 creator.device_id,
-                creator.app_id,
+                creator.source_app_id,
             )
             source_id = identity_to_source_id.get(identity)
 

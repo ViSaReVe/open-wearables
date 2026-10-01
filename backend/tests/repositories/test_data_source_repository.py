@@ -159,7 +159,8 @@ class TestDataSourceRepository:
             provider=ProviderName.APPLE,
             device_model="Watch6,2",
             source="Apple Watch",
-            app_id="com.apple.health.X",
+            source_app_id="com.apple.health.X",
+            device_manufacturer="Apple Inc.",
         )
         renamed = repo.ensure_data_source(
             db,
@@ -167,11 +168,12 @@ class TestDataSourceRepository:
             provider=ProviderName.APPLE,
             device_model="Watch6,2",
             source="Kuba's Watch",
-            app_id="com.apple.health.X",
+            source_app_id="com.apple.health.X",
         )
 
         assert keyed.id == legacy.id == renamed.id
-        assert keyed.app_id == "com.apple.health.X"
+        assert keyed.source_app_id == "com.apple.health.X"
+        assert keyed.device_manufacturer == "Apple Inc."
 
     def test_ids_ignored_for_providers_without_stable_ids(self, db: Session) -> None:
         user = UserFactory()
@@ -186,3 +188,55 @@ class TestDataSourceRepository:
         )
 
         assert ds.device_id is None
+
+    def test_writer_row_learns_model_and_matches_unknown_model(self, db: Session) -> None:
+        user = UserFactory()
+        repo = DataSourceRepository(DataSource)
+        ids = {"user_id": user.id, "provider": ProviderName.HEALTH_CONNECT, "source_app_id": "com.fitbit.FitbitMobile"}
+
+        first = repo.ensure_data_source(db, **ids, source="com.fitbit.FitbitMobile")
+        known = repo.ensure_data_source(db, **ids, device_model="Charge 6", source="com.fitbit.FitbitMobile")
+        unknown_again = repo.ensure_data_source(db, **ids, source="com.fitbit.FitbitMobile")
+
+        assert first.id == known.id == unknown_again.id
+        assert known.device_model == "Charge 6"
+
+    def test_writer_with_several_models_keeps_separate_sources(self, db: Session) -> None:
+        user = UserFactory()
+        repo = DataSourceRepository(DataSource)
+        ids = {"user_id": user.id, "provider": ProviderName.HEALTH_CONNECT, "source_app_id": "com.fitbit.FitbitMobile"}
+
+        charge = repo.ensure_data_source(db, **ids, device_model="Charge 6")
+        watch = repo.ensure_data_source(db, **ids, device_model="Pixel Watch 2")
+        unknown = repo.ensure_data_source(db, **ids)
+
+        assert len({charge.id, watch.id, unknown.id}) == 3
+
+    def test_host_model_is_replaced_by_producer_model(self, db: Session) -> None:
+        user = UserFactory()
+        repo = DataSourceRepository(DataSource)
+        ids = {
+            "user_id": user.id,
+            "provider": ProviderName.APPLE,
+            "source": "Oura",
+            "source_app_id": "com.ouraring.oura",
+        }
+
+        relayed = repo.ensure_data_source(db, **ids, device_model="iPhone16,1", reported_type=DeviceType.PHONE)
+        produced = repo.ensure_data_source(db, **ids, device_model="Oura Ring Gen3")
+        old_client = repo.ensure_data_source(db, **ids, device_model="iPhone16,1", reported_type=DeviceType.PHONE)
+
+        assert relayed.id == produced.id == old_client.id
+        assert produced.device_model == "Oura Ring Gen3"
+        assert produced.device_type == DeviceType.RING
+
+    def test_apple_own_source_keeps_product_type(self, db: Session) -> None:
+        user = UserFactory()
+        repo = DataSourceRepository(DataSource)
+        ids = {"user_id": user.id, "provider": ProviderName.APPLE, "source_app_id": APPLE_HEALTH_SOURCE}
+
+        watch = repo.ensure_data_source(db, **ids, device_model="Watch6,2")
+        other = repo.ensure_data_source(db, **ids, device_model="Watch7,5")
+
+        assert watch.id != other.id
+        assert watch.device_model == "Watch6,2"

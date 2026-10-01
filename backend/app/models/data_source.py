@@ -36,10 +36,10 @@ class DataSource(BaseDbModel):
             "uq_data_source_app",
             "user_id",
             "provider",
-            "app_id",
+            "source_app_id",
             text("COALESCE(device_model, '')"),
             unique=True,
-            postgresql_where=text("device_id IS NULL AND app_id IS NOT NULL"),
+            postgresql_where=text("device_id IS NULL AND source_app_id IS NOT NULL"),
         ),
         Index(
             "uq_data_source_identity",
@@ -48,7 +48,7 @@ class DataSource(BaseDbModel):
             text("COALESCE(device_model, '')"),
             text("COALESCE(source, '')"),
             unique=True,
-            postgresql_where=text("device_id IS NULL AND app_id IS NULL"),
+            postgresql_where=text("device_id IS NULL AND source_app_id IS NULL"),
         ),
     )
 
@@ -71,7 +71,8 @@ class DataSource(BaseDbModel):
     # Stable identifiers from the provider: a per-device id (Polar device_id, Samsung deviceId)
     # and the writer app id (HealthKit/Health Connect appId)
     device_id: Mapped[str_100 | None]
-    app_id: Mapped[str_100 | None]
+    source_app_id: Mapped[str_100 | None]
+    device_manufacturer: Mapped[str_100 | None]
 
     event_records: Mapped[OneToMany["EventRecord"]]
     data_points: Mapped[OneToMany["DataPointSeries"]]

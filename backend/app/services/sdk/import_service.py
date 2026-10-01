@@ -154,7 +154,7 @@ class ImportService:
 
             device_model, software_version, original_source_name = extract_device_info(wjson.source)
             device_type = extract_device_type(wjson.source)
-            device_id, app_id = extract_device_ids(wjson.source)
+            device_id, source_app_id, device_manufacturer = extract_device_ids(wjson.source)
 
             metrics, time_series_samples, duration = self._extract_metrics_from_workout_stats(
                 wjson.values,
@@ -167,7 +167,8 @@ class ImportService:
                 original_source_name,
                 device_type,
                 device_id,
-                app_id,
+                source_app_id,
+                device_manufacturer,
             )
 
             if duration is None:
@@ -191,7 +192,8 @@ class ImportService:
                 software_version=software_version,
                 device_type=device_type,
                 device_id=device_id,
-                app_id=app_id,
+                source_app_id=source_app_id,
+                device_manufacturer=device_manufacturer,
                 provider=provider,
                 user_id=user_uuid,
             )
@@ -251,7 +253,7 @@ class ImportService:
 
             # Extract device info
             device_model, software_version, original_source_name = extract_device_info(rjson.source)
-            device_id, app_id = extract_device_ids(rjson.source)
+            device_id, source_app_id, device_manufacturer = extract_device_ids(rjson.source)
 
             sample = TimeSeriesSampleCreate(
                 id=uuid4(),
@@ -262,7 +264,8 @@ class ImportService:
                 software_version=software_version,
                 device_type=extract_device_type(rjson.source),
                 device_id=device_id,
-                app_id=app_id,
+                source_app_id=source_app_id,
+                device_manufacturer=device_manufacturer,
                 provider=provider,
                 recorded_at=rjson.startDate,
                 zone_offset=rjson.zoneOffset,
@@ -301,7 +304,8 @@ class ImportService:
         source_name: str | None,
         device_type: DeviceType | None = None,
         device_id: str | None = None,
-        app_id: str | None = None,
+        source_app_id: str | None = None,
+        device_manufacturer: str | None = None,
     ) -> tuple[EventRecordMetrics, list[TimeSeriesSampleCreate], int | float | None]:
         """
         Returns a tuple with the metrics, time series samples, and duration.
@@ -331,7 +335,8 @@ class ImportService:
                         software_version=software_version,
                         device_type=device_type,
                         device_id=device_id,
-                        app_id=app_id,
+                        source_app_id=source_app_id,
+                        device_manufacturer=device_manufacturer,
                         provider=provider,
                         recorded_at=end_date,
                         zone_offset=zone_offset,

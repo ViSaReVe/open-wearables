@@ -42,6 +42,17 @@ APPLE_PRODUCT_TYPE_PREFIXES: list[tuple[str, DeviceType]] = [
     ("iPad", DeviceType.TABLET),
 ]
 
+# HealthKit sources written by Apple's own devices; their productType is the producing device
+APPLE_SOURCE_APP_PREFIX = "com.apple.health."
+
+
+def is_host_model(source_app_id: str | None, device_model: str | None) -> bool:
+    """Apple hardware code on a third-party writer's row: the iPhone/Watch that relayed it, not the producer."""
+    if not source_app_id or source_app_id.startswith(APPLE_SOURCE_APP_PREFIX) or not device_model:
+        return False
+    return device_model.startswith(tuple(prefix for prefix, _ in APPLE_PRODUCT_TYPE_PREFIXES) + ("iPod",))
+
+
 # Samsung model code prefix (SM-X...); SM-R is skipped as it mixes watches, bands and buds
 SAMSUNG_MODEL_CODE = re.compile(r"^SM-([A-Z])\d")
 SAMSUNG_MODEL_PREFIX_DEVICE_TYPE: dict[str, DeviceType] = {

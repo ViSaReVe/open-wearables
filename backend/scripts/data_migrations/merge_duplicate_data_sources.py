@@ -51,7 +51,7 @@ _RENAME_CANDIDATES = text("""
                 THEN NULL ELSE device_model END AS new_model,
            CASE WHEN provider = 'polar' AND source IS NULL THEN 'polar' ELSE source END AS new_source
     FROM data_source
-    WHERE device_id IS NULL AND app_id IS NULL
+    WHERE device_id IS NULL AND source_app_id IS NULL
       AND (lower(btrim(device_model)) = ANY(:placeholders)
            OR (provider = 'google_health' AND device_model = ANY(:platforms))
            OR (provider = 'polar' AND source IS NULL))
@@ -60,7 +60,7 @@ _RENAME_CANDIDATES = text("""
 _TARGET = text("""
     SELECT id FROM data_source
     WHERE user_id = :user_id AND provider = :provider AND id <> :src
-      AND device_id IS NULL AND app_id IS NULL
+      AND device_id IS NULL AND source_app_id IS NULL
       AND COALESCE(device_model, '') = COALESCE(:model, '') AND COALESCE(source, '') = COALESCE(:source, '')
 """)
 
@@ -119,7 +119,7 @@ _RANKED_DUPLICATES = """
         JOIN data_source ds ON ds.id = e.data_source_id
         WINDOW w AS (
             PARTITION BY ds.user_id, ds.provider, e.category, e.start_datetime, e.end_datetime
-            ORDER BY (ds.device_id IS NOT NULL) DESC, (ds.app_id IS NOT NULL) DESC,
+            ORDER BY (ds.device_id IS NOT NULL) DESC, (ds.source_app_id IS NOT NULL) DESC,
                      (ds.device_model IS NOT NULL) DESC,
                      (ds.source IS NOT NULL AND ds.source <> ds.provider::text) DESC,
                      ds.id, e.id

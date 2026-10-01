@@ -57,11 +57,14 @@ def extract_device_info(source: SourceInfo | None) -> tuple[str | None, str | No
     return device_model, software_version, original_source_name
 
 
-def extract_device_ids(source: SourceInfo | None) -> tuple[str | None, str | None]:
-    """(device_id, app_id) reported by the SDK; the repository keeps only the ones a provider's identity uses."""
+def extract_device_ids(source: SourceInfo | None) -> tuple[str | None, str | None, str | None]:
+    """(device_id, source_app_id, device_manufacturer) reported by the SDK.
+
+    The repository keeps only the ids a provider's identity uses; the manufacturer is descriptive only.
+    """
     if not source:
-        return None, None
-    return source.device_id, source.app_id or source.bundle_identifier
+        return None, None, None
+    return source.device_id, source.app_id or source.bundle_identifier, source.device_manufacturer
 
 
 def extract_device_type(source: SourceInfo | None) -> DeviceType | None:

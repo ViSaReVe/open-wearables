@@ -89,7 +89,8 @@ class EventRecordCreate(EventRecordBase):
     software_version: str | None = None
     device_type: DeviceType | None = None
     device_id: str | None = None
-    app_id: str | None = None
+    source_app_id: str | None = None
+    device_manufacturer: str | None = None
 
 
 class EventRecordUpdate(EventRecordBase):
