@@ -161,6 +161,8 @@ The defaults in `.env.example` are development values. Override at least these f
 
 `VITE_API_URL` is a frontend variable and is not part of `.env.example`—add it to the same `.env`. For a local trial of this stack, set it to `http://localhost:8000`; in production it is typically the same value as `API_BASE_URL`.
 
+Leave `OTEL_PROPAGATORS` unset unless the propagator packages it names are installed in the image. The OpenTelemetry API reads it when the backend starts, and an unknown value such as `b3` stops every backend container with `ValueError: Propagator b3 not found`.
+
 ### Running it
 
 <Steps>
