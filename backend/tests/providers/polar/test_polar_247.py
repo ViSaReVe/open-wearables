@@ -224,17 +224,34 @@ class TestPolar247DailyActivityNormalization:
 
         assert [s.value for s in samples if s.series_type == SeriesType.exercise_time] == [0]
 
-    def test_no_exercise_time_without_zones(self, data_247: Polar247Data, sample_activity: dict) -> None:
-        samples = data_247.normalize_daily_activity([sample_activity], uuid4())
-
-        assert not any(s.series_type == SeriesType.exercise_time for s in samples)
-
-    def test_no_exercise_time_with_an_unreadable_zone_timestamp(
-        self, data_247: Polar247Data, sample_activity: dict
+    @pytest.mark.parametrize(
+        "zones",
+        [
+            None,
+            {"samples": None},
+            {
+                "samples": [
+                    {"zone": "MODERATE", "timestamp": "2024-01-15T08:00:00"},
+                    {"zone": "LIGHT", "timestamp": "x"},
+                ]
+            },
+            {
+                "samples": [
+                    {"zone": "MODERATE", "timestamp": "2024-01-15T08:00:00"},
+                    {"zone": "LIGHT", "timestamp": None},
+                ]
+            },
+        ],
+        ids=["no_zones", "null_samples", "unreadable_timestamp", "null_timestamp"],
+    )
+    def test_unusable_zones_give_no_exercise_time(
+        self, data_247: Polar247Data, sample_activity: dict, zones: dict | None
     ) -> None:
-        activity = self._with_zones(sample_activity, [("MODERATE", "2024-01-15T08:00:00"), ("LIGHT", "not-a-time")])
+        sample_activity["end_time"] = "2024-01-15T23:59:59"
+        if zones is not None:
+            sample_activity["samples"] = {"activity_zones": zones}
 
-        samples = data_247.normalize_daily_activity([activity], uuid4())
+        samples = data_247.normalize_daily_activity([sample_activity], uuid4())
 
         assert not any(s.series_type == SeriesType.exercise_time for s in samples)
         assert any(s.series_type == SeriesType.steps for s in samples)
@@ -254,32 +271,6 @@ class TestPolar247DailyActivityNormalization:
         samples = data_247.normalize_daily_activity([activity], uuid4())
 
         assert [s.value for s in samples if s.series_type == SeriesType.exercise_time] == [54]
-
-    def test_malformed_zone_block_keeps_the_rest_of_the_day(
-        self, data_247: Polar247Data, sample_activity: dict
-    ) -> None:
-        sample_activity["samples"] = {"activity_zones": {"samples": None}}
-
-        samples = data_247.normalize_daily_activity([sample_activity], uuid4())
-
-        assert not any(s.series_type == SeriesType.exercise_time for s in samples)
-        assert any(s.series_type == SeriesType.steps for s in samples)
-
-    def test_null_zone_timestamp_gives_no_exercise_time(self, data_247: Polar247Data, sample_activity: dict) -> None:
-        sample_activity["end_time"] = "2024-01-15T23:59:59"
-        sample_activity["samples"] = {
-            "activity_zones": {
-                "samples": [
-                    {"zone": "MODERATE", "timestamp": "2024-01-15T08:00:00"},
-                    {"zone": "MODERATE", "timestamp": None},
-                ]
-            }
-        }
-
-        samples = data_247.normalize_daily_activity([sample_activity], uuid4())
-
-        assert not any(s.series_type == SeriesType.exercise_time for s in samples)
-        assert any(s.series_type == SeriesType.steps for s in samples)
 
     def test_requests_activity_zones(self, data_247: Polar247Data) -> None:
         with patch.object(data_247, "_make_api_request", return_value=[]) as request:
