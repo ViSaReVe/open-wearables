@@ -60,10 +60,8 @@ async def _lifespan(_: FastAPI) -> AsyncGenerator[None, None]:
         await asyncio.to_thread(endpoint_usage.flush)
 
 
-# Turn off FastAPI's own OpenTelemetry signals and its automatic exporter setup. Without
-# this, FastAPI records request traces, metrics or exception logs as soon as an
-# OpenTelemetry provider for that signal is installed, and installs exporters itself when
-# OTEL_EXPORTER_OTLP_ENDPOINT is set and the OTLP exporter packages are present.
+# FastAPI >= 0.142 turns on its own OpenTelemetry by default (request traces, metrics,
+# exception logs, OTLP exporters from OTEL_* variables). Keep it off: our OTel setup is explicit.
 api = FastAPI(
     title=settings.api_name,
     version=version("open-wearables"),
