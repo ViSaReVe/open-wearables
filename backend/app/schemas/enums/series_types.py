@@ -27,6 +27,8 @@ class SeriesType(str, Enum):
     heart_rate_recovery_one_minute = "heart_rate_recovery_one_minute"
     walking_heart_rate_average = "walking_heart_rate_average"
     heart_rate_variability_rmssd = "heart_rate_variability_rmssd"
+    rr_interval = "rr_interval"
+    ecg_signal_quality = "ecg_signal_quality"
 
     # =========================================================================
     # BIOMETRICS - Blood & Respiratory (IDs 20-39)
@@ -202,6 +204,8 @@ SERIES_TYPE_DEFINITIONS: list[tuple[int, SeriesType, str]] = [
     (4, SeriesType.heart_rate_recovery_one_minute, "bpm"),
     (5, SeriesType.walking_heart_rate_average, "bpm"),
     (7, SeriesType.heart_rate_variability_rmssd, "ms"),
+    (8, SeriesType.rr_interval, "ms"),
+    (9, SeriesType.ecg_signal_quality, "score"),
     # -------------------------------------------------------------------------
     # BIOMETRICS - Blood & Respiratory (IDs 20-39)
     # -------------------------------------------------------------------------
@@ -347,6 +351,14 @@ SERIES_TYPE_UNIT_BY_ENUM: dict[SeriesType, str] = {enum: unit for _, enum, unit 
 # Only series types that need a meaningful clarification have an entry here;
 SERIES_TYPE_DESCRIPTION_BY_ENUM: dict[SeriesType, str] = {
     SeriesType.garmin_body_battery: "Intraday body battery readings (0-100), one sample per measurement",
+    SeriesType.rr_interval: (
+        "Beat-to-beat (R-R) interval, one sample per beat, timestamped at the closing beat. "
+        "Derived by Open Wearables from the raw ECG waveform"
+    ),
+    SeriesType.ecg_signal_quality: (
+        "ECG signal quality level from the device, one sample per quality change: "
+        "0 = unknown, 1 = no contact, 2 = low, 3 = high"
+    ),
 }
 
 

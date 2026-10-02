@@ -241,6 +241,17 @@ class TestAnalyzeEcg:
         analysis = analyze_ecg(ecg.times_ms, signal)
         assert len({iv.segment for iv in analysis.rr_intervals}) == 2
 
+    def test_isolated_missing_samples_are_bridged(self) -> None:
+        """Single dropped samples are interpolated, not treated as segment breaks."""
+        ecg = _recording(0, 130.0, **NOISE_LEVELS["clean"])
+        signal = ecg.signal_mv.copy()
+        signal[::50] = np.nan
+        analysis = analyze_ecg(ecg.times_ms, signal)
+
+        assert {iv.segment for iv in analysis.rr_intervals} == {0}
+        assert analysis.sampling_rate_hz == pytest.approx(130.0, rel=1e-4)
+        assert analysis.rmssd_ms == pytest.approx(ecg.true_rmssd_ms, abs=0.5)
+
     def test_low_sampling_rate_is_skipped(self) -> None:
         times = np.arange(0, 30_000, 40.0)  # 25 Hz
         analysis = analyze_ecg(times, np.zeros(times.size))

@@ -30,6 +30,8 @@ The `types` parameter in the timeseries endpoint accepts the following values:
 | `resting_heart_rate` | bpm | Resting heart rate |
 | `heart_rate_variability_sdnn` | ms | HRV (SDNN method) |
 | `heart_rate_variability_rmssd` | ms | HRV (RMSSD method) |
+| `rr_interval` | ms | Beat-to-beat (R-R) interval, one sample per beat at the closing beat. Consecutive samples are adjacent beats when their time gap equals the later sample's value |
+| `ecg_signal_quality` | score | ECG signal quality level: 0 = unknown, 1 = no contact, 2 = low, 3 = high. Holds until the next sample |
 | `heart_rate_recovery_one_minute` | bpm | HR recovery after 1 minute |
 | `walking_heart_rate_average` | bpm | Average HR while walking |
 | `recovery_score` | score | Recovery score |

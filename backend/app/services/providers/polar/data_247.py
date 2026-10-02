@@ -4,15 +4,18 @@ from decimal import Decimal
 from typing import Any, TypeVar
 from uuid import UUID, uuid4
 
+import numpy as np
 from fastapi import HTTPException, status
 from pydantic import BaseModel, ValidationError
 
+from app.algorithms.ecg import analyze_ecg
 from app.config import settings
 from app.constants.series_types.polar import (
     ANS_CHARGE_STATUS_LABELS,
     BODY_TEMP_SERIES_TYPE,
     CIRCADIAN_QUALITY_LABELS,
     CIRCADIAN_QUALITY_VALUES,
+    ECG_QUALITY_SCORE,
     GRADE_CLASSIFICATION_LABELS,
     HYPNOGRAM_STAGE_MAP,
     NIGHTLY_RECHARGE_STATUS_LABELS,
@@ -39,6 +42,7 @@ from app.schemas.providers.polar import (
 )
 from app.schemas.providers.polar.elixir import (
     BodyTemperaturePeriodJSON,
+    EcgQualityLevel,
     EcgTestResultJSON,
     SkinTemperatureJSON,
     Spo2TestResultJSON,
@@ -870,7 +874,122 @@ class Polar247Data(Base247DataTemplate):
                         series_type=SeriesType.heart_rate,
                     )
                 )
+            # Raw-signal derived series are added alongside (never instead of) Polar's own values.
+            try:
+                samples.extend(self._wrist_ecg_quality_samples(parsed, recorded_at, user_id))
+                samples.extend(self._wrist_ecg_rr_samples(parsed, recorded_at, user_id))
+            except Exception as e:
+                log_and_capture_error(
+                    e,
+                    self.logger,
+                    "Polar wrist ECG waveform analysis failed",
+                    extra={"user_id": str(user_id), "test_time": parsed.test_time, "error": str(e)},
+                )
         return samples
+
+    @staticmethod
+    def _wrist_ecg_quality_timeline(parsed: EcgTestResultJSON) -> list[tuple[int, EcgQualityLevel]]:
+        """Quality changes sorted by time; a duplicate offset keeps the last reported level."""
+        by_offset: dict[int, EcgQualityLevel] = {}
+        for q in parsed.quality_measurements or []:
+            if q.recording_time_delta_ms is not None and q.quality_level is not None:
+                by_offset[q.recording_time_delta_ms] = q.quality_level
+        return sorted(by_offset.items())
+
+    def _wrist_ecg_quality_samples(
+        self,
+        parsed: EcgTestResultJSON,
+        recorded_at: datetime,
+        user_id: UUID,
+    ) -> list[TimeSeriesSampleCreate]:
+        return [
+            TimeSeriesSampleCreate(
+                id=uuid4(),
+                user_id=user_id,
+                provider=ProviderName.POLAR,
+                source=ProviderName.POLAR,
+                recorded_at=recorded_at + timedelta(milliseconds=offset_ms),
+                value=ECG_QUALITY_SCORE[level],
+                series_type=SeriesType.ecg_signal_quality,
+            )
+            for offset_ms, level in self._wrist_ecg_quality_timeline(parsed)
+        ]
+
+    def _wrist_ecg_rr_samples(
+        self,
+        parsed: EcgTestResultJSON,
+        recorded_at: datetime,
+        user_id: UUID,
+    ) -> list[TimeSeriesSampleCreate]:
+        """Beat-to-beat RR intervals from R-peak detection on the wrist ECG waveform.
+
+        Assumes `recording_time_delta_ms` is measured from `test_time` and that each quality
+        measurement holds until the next one (neither is documented by Polar). NO_CONTACT
+        stretches are excluded from detection; LOW-quality beats are kept (the quality series is
+        stored next to them) but are excluded from the RMSSD the analysis reports.
+        """
+        points = [
+            (s.recording_time_delta_ms, s.amplitude_mv)
+            for s in parsed.samples or []
+            if s.recording_time_delta_ms is not None and s.amplitude_mv is not None
+        ]
+        if len(points) < 2:
+            return []
+        times_ms = np.array([t for t, _ in points], dtype=float)
+        amplitude = np.array([a for _, a in points], dtype=float)
+
+        timeline = self._wrist_ecg_quality_timeline(parsed)
+        if timeline:
+            change_times = np.array([offset for offset, _ in timeline], dtype=float)
+            levels = [level for _, level in timeline]
+            idx = np.searchsorted(change_times, times_ms, side="right") - 1
+            per_sample = [levels[i] if i >= 0 else EcgQualityLevel.UNKNOWN for i in idx]
+            no_contact = np.array([lvl == EcgQualityLevel.NO_CONTACT for lvl in per_sample])
+            low_quality = np.array([lvl == EcgQualityLevel.LOW for lvl in per_sample])
+        else:
+            no_contact = low_quality = None
+
+        analysis = analyze_ecg(times_ms, amplitude, no_contact=no_contact, low_quality=low_quality)
+
+        def _finite(value: float | None) -> float | None:
+            return round(float(value), 3) if value is not None and np.isfinite(value) else None
+
+        rr_values = [iv.rr_ms for iv in analysis.rr_intervals if not iv.is_artifact]
+        # Logged side by side with Polar's scalars: real payloads will show whether rri_ms is a
+        # mean RR and whether heart_rate_variability_ms agrees with an RMSSD from true beats.
+        log_structured(
+            self.logger,
+            "info",
+            "Polar wrist ECG beat analysis",
+            provider="polar",
+            action="wrist_ecg_beat_analysis",
+            user_id=str(user_id),
+            test_time=parsed.test_time,
+            sampling_rate_hz=_finite(analysis.sampling_rate_hz),
+            beats=len(analysis.beat_times_ms),
+            rr_intervals=len(analysis.rr_intervals),
+            mean_rr_ms=_finite(float(np.mean(rr_values))) if rr_values else None,
+            polar_rri_ms=parsed.rri_ms,
+            rmssd_ms=_finite(analysis.rmssd_ms),
+            polar_hrv_ms=parsed.heart_rate_variability_ms,
+            skipped_reason=analysis.skipped_reason,
+        )
+
+        # Artifacts are not persisted (they are not beat-to-beat intervals); low-quality ones are,
+        # with the quality series stored alongside so consumers can apply their own policy.
+        return [
+            TimeSeriesSampleCreate(
+                id=uuid4(),
+                user_id=user_id,
+                provider=ProviderName.POLAR,
+                source=ProviderName.POLAR,
+                recorded_at=recorded_at + timedelta(milliseconds=iv.end_time_ms),
+                value=round(iv.rr_ms, 3),
+                series_type=SeriesType.rr_interval,
+            )
+            for iv in analysis.rr_intervals
+            if not iv.is_artifact
+        ]
 
     # -------------------------------------------------------------------------
     # Persistence helpers

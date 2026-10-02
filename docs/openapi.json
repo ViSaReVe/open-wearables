@@ -14454,6 +14454,8 @@
           "heart_rate_recovery_one_minute",
           "walking_heart_rate_average",
           "heart_rate_variability_rmssd",
+          "rr_interval",
+          "ecg_signal_quality",
           "oxygen_saturation",
           "blood_glucose",
           "blood_pressure_systolic",

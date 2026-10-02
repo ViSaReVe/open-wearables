@@ -1,6 +1,6 @@
 from app.constants.sleep import SleepStageType
 from app.schemas.enums import SeriesType
-from app.schemas.providers.polar.elixir import TemperatureMeasurementType
+from app.schemas.providers.polar.elixir import EcgQualityLevel, TemperatureMeasurementType
 from app.schemas.providers.polar.sleepwise import (
     CircadianBedtimeQuality,
     GradeClassification,
@@ -14,6 +14,14 @@ HYPNOGRAM_STAGE_MAP: dict[int, SleepStageType] = {
     3: SleepStageType.LIGHT,
     4: SleepStageType.DEEP,
     5: SleepStageType.UNKNOWN,
+}
+
+# SeriesType.ecg_signal_quality encoding (ordinal, mirrors the Polar enum order).
+ECG_QUALITY_SCORE: dict[EcgQualityLevel, int] = {
+    EcgQualityLevel.UNKNOWN: 0,
+    EcgQualityLevel.NO_CONTACT: 1,
+    EcgQualityLevel.LOW: 2,
+    EcgQualityLevel.HIGH: 3,
 }
 
 BODY_TEMP_SERIES_TYPE: dict[TemperatureMeasurementType, SeriesType] = {

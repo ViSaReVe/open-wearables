@@ -47,26 +47,33 @@ ECTOPIC_MEDIAN_WINDOW = 5
 # Above this fraction of rejected intervals the beat train is not trusted for RMSSD: on synthetic
 # data, detector precision collapses together with a rising artifact rate (see PROTOTYPE_NOTES.md).
 MAX_ARTIFACT_FRACTION = 0.20
-# Two consecutive sample timestamps further apart than this many periods mark a gap.
-GAP_FACTOR = 1.5
+# Missing samples are bridged by linear interpolation when the hole is at most this long (about
+# the half-width of an R wave, so a hole cannot hide a whole R upstroke); longer holes split the
+# recording into separate segments.
+MAX_BRIDGED_GAP_S = 0.025
 
 
-def estimate_sampling_period_ms(times_ms: np.ndarray, segments: Sequence[slice] | None = None) -> float:
+def estimate_sampling_period_ms(
+    times_ms: np.ndarray,
+    segments: Sequence[slice] | None = None,
+    sample_index: np.ndarray | None = None,
+) -> float:
     """Estimate the sampling period from (possibly integer-rounded) sample timestamps.
 
     Least-squares slope of time vs. sample index, pooled across segments (common slope, separate
     intercepts). Rounding each timestamp to the nearest ms (e.g. 7/8 ms steps at 130 Hz) averages
-    out in the fit, unlike taking the median of first differences.
+    out in the fit, unlike taking the median of first differences. `sample_index` gives each
+    sample's position on the sampling grid when samples are missing (default: 0, 1, 2, ...).
     """
     t = np.asarray(times_ms, dtype=float)
+    index = np.arange(t.size, dtype=float) if sample_index is None else np.asarray(sample_index, dtype=float)
     segments = segments or [slice(0, t.size)]
     num = 0.0
     den = 0.0
     for seg in segments:
-        ts = t[seg]
+        ts, n = t[seg], index[seg]
         if ts.size < 2:
             continue
-        n = np.arange(ts.size, dtype=float)
         n_c = n - n.mean()
         num += float(np.dot(n_c, ts - ts.mean()))
         den += float(np.dot(n_c, n_c))
@@ -317,18 +324,17 @@ class EcgAnalysis:
     skipped_reason: str | None = None
 
 
-def _split_segments(times_ms: np.ndarray, usable: np.ndarray) -> list[slice]:
-    rough_period = float(np.median(np.diff(times_ms))) if times_ms.size > 1 else 0.0
+def _split_segments(times_ms: np.ndarray, excluded: np.ndarray, max_gap_ms: float) -> list[slice]:
+    """Contiguous runs of non-excluded samples with no time gap longer than `max_gap_ms`."""
     breaks = np.zeros(times_ms.size, dtype=bool)
-    if times_ms.size > 1:
-        breaks[1:] = np.diff(times_ms) > GAP_FACTOR * rough_period
+    breaks[1:] = np.diff(times_ms) > max_gap_ms
     segments: list[slice] = []
     start: int | None = None
     for i in range(times_ms.size):
-        if not usable[i] or breaks[i]:
+        if excluded[i] or breaks[i]:
             if start is not None:
                 segments.append(slice(start, i))
-            start = i if usable[i] else None
+            start = None if excluded[i] else i
         elif start is None:
             start = i
     if start is not None:
@@ -346,24 +352,38 @@ def analyze_ecg(
 
     Args:
         times_ms: Sample times in ms from recording start (may be integer-rounded).
-        amplitude: ECG samples (NaN allowed; NaN samples are treated as gaps).
+        amplitude: ECG samples. NaN marks a missing sample: holes up to MAX_BRIDGED_GAP_S are
+            interpolated, longer ones split the recording.
         no_contact: Per-sample mask; True samples are excluded from detection and split segments.
         low_quality: Per-sample mask; beats there are detected and returned but their RR intervals
             are flagged and excluded from the RMSSD.
     """
     t = np.asarray(times_ms, dtype=float)
     x = np.asarray(amplitude, dtype=float)
+    excluded = np.zeros(t.size, dtype=bool) if no_contact is None else np.asarray(no_contact, dtype=bool)
+    low = np.zeros(t.size, dtype=bool) if low_quality is None else np.asarray(low_quality, dtype=bool)
+    # Missing samples (NaN) are dropped here and bridged or split on below, like any other hole.
+    present = np.isfinite(x) & np.isfinite(t)
+    t, x, excluded, low = t[present], x[present], excluded[present], low[present]
     order = np.argsort(t, kind="stable")
-    t, x = t[order], x[order]
-    excluded = np.zeros(t.size, dtype=bool) if no_contact is None else np.asarray(no_contact, dtype=bool)[order]
-    low = np.zeros(t.size, dtype=bool) if low_quality is None else np.asarray(low_quality, dtype=bool)[order]
-    usable = np.isfinite(x) & np.isfinite(t) & ~excluded
+    t, x, excluded, low = t[order], x[order], excluded[order], low[order]
 
     if t.size < 2:
         return EcgAnalysis(sampling_rate_hz=float("nan"), skipped_reason="too_few_samples")
 
-    segments = _split_segments(t, usable)
-    period_ms = estimate_sampling_period_ms(t, segments)
+    rough_period = float(np.median(np.diff(t)))
+    if not rough_period > 0:
+        return EcgAnalysis(sampling_rate_hz=float("nan"), skipped_reason="no_time_base")
+    # A hole of k missing samples is a step of (k + 1) periods; half a period of slack for jitter.
+    max_gap_ms = max(MAX_BRIDGED_GAP_S * 1000.0, rough_period) + 0.5 * rough_period
+    segments = _split_segments(t, excluded, max_gap_ms)
+    # Position of every sample on its segment's sampling grid (accounts for missing samples). Round
+    # each step, not the elapsed time: the median step of integer-ms stamps can be off by up to
+    # 0.5 ms (8 ms at 130 Hz), which would drift by hundreds of samples over a recording.
+    grid_index = np.zeros(t.size)
+    for seg in segments:
+        grid_index[seg] = np.concatenate([[0.0], np.cumsum(np.rint(np.diff(t[seg]) / rough_period))])
+    period_ms = estimate_sampling_period_ms(t, segments, grid_index)
     if not np.isfinite(period_ms) or period_ms <= 0:
         return EcgAnalysis(sampling_rate_hz=float("nan"), skipped_reason="no_time_base")
     fs = 1000.0 / period_ms
@@ -374,18 +394,21 @@ def analyze_ecg(
     rr_segments: list[np.ndarray] = []
     keep_segments: list[np.ndarray] = []
     for seg_id, seg in enumerate(segments):
-        ts, xs, lows = t[seg], x[seg], low[seg]
-        if ts.size * period_ms < MIN_SEGMENT_S * 1000.0:
+        ts, n = t[seg], grid_index[seg]
+        if ts.size < 2 or (n[-1] + 1) * period_ms < MIN_SEGMENT_S * 1000.0:
             continue
-        # Rebuild a uniform time base from the fit (intercept per segment, pooled slope) so beat
-        # times are not quantised to the integer-ms timestamps.
-        n = np.arange(ts.size, dtype=float)
+        # Uniform grid for the segment: bridged holes are linearly interpolated. Beat times come
+        # from the fitted time base (intercept per segment, pooled slope), so they are not
+        # quantised to the integer-ms timestamps.
+        grid = np.arange(int(n[-1]) + 1, dtype=float)
+        xs = np.interp(grid, n, x[seg])
+        lows = low[seg][np.clip(np.searchsorted(n, grid), 0, n.size - 1)]
         intercept = float(ts.mean() - period_ms * n.mean())
         peaks = detect_r_peaks(xs, fs)
         if peaks.size == 0:
             continue
         beat_times = intercept + period_ms * peaks
-        beat_low = lows[np.clip(np.rint(peaks).astype(int), 0, ts.size - 1)]
+        beat_low = lows[np.clip(np.rint(peaks).astype(int), 0, grid.size - 1)]
         analysis.beat_times_ms.extend(beat_times.tolist())
 
         rr = np.diff(beat_times)
