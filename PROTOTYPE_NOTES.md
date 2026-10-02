@@ -154,10 +154,8 @@ env vars (`ENV=test`, `SECRET_KEY`, `MASTER_KEY` with the values from `tests/con
 
 ## Status
 
-- Commits are on local branch `polar-raw-ecg-prototype` only. **Nothing pushed.**
-- The fork `ViSaReVe/open-wearables` did not exist when checked, and `origin` in this checkout is upstream `the-momentum/open-wearables`.
-- To push: create the fork, `git remote add fork https://github.com/ViSaReVe/open-wearables.git`, then `git push fork polar-raw-ecg-prototype`.
-- No PR, no issue.
+- Branch `polar-raw-ecg-prototype` is pushed to the fork: <https://github.com/ViSaReVe/open-wearables/tree/polar-raw-ecg-prototype>. Nothing is pushed to upstream `the-momentum/open-wearables`.
+- No PR. Two issues (the RMSSD bug report and the Polar wrist-ECG proposal) are prepared; any PR waits for a go-ahead from the core team, per `CONTRIBUTING.md`.
 
 ## Appendix A — benchmark script (section 2 grid)
 
